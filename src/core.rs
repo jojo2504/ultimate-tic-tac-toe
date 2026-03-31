@@ -110,7 +110,7 @@ pub const FINAL_CHECKERS: [u16; 8] = [
     0b1010100u16,
 ];
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub enum Symbol {
     #[default]
     Cross,
@@ -131,7 +131,7 @@ pub struct State {
     pub all_clear: u16,   // 0 if not cleared, else 1
     pub white_clear: u16, // 1s for each sub board cleared by white
     pub black_clear: u16, // 1s for each sub board cleared by black
-    pub player_turn: Symbol,
+    pub turn: Symbol,
     pub last_move: Option<u8>,     // index of the nth bits played
     pub current_focus: Option<u8>, // the forced board to play on, None if impossible giving a free board focus
 }
@@ -154,6 +154,8 @@ pub struct TicTacToe {
     pub undo_stack: Box<[Undo; 5096]>,
     /// Used to index the state_stack, representing the current ply, equivalent to a half-move.
     pub ply_index: usize,
+    pub zobrist_key: u128,
+    pub winner: Option<Symbol>,
 }
 
 impl TicTacToe {
@@ -165,6 +167,8 @@ impl TicTacToe {
             state: State::default(),
             undo_stack: Box::new([Undo::default(); 5096]),
             ply_index: 0,
+            zobrist_key: 0,
+            winner: None,
         }
     }
 
@@ -178,14 +182,14 @@ impl TicTacToe {
             current_focus: self.state.current_focus,
         };
 
-        match self.state.player_turn {
+        match self.state.turn {
             Symbol::Cross => self.white_bitboard ^= 1 << square,
             Symbol::Circle => self.black_bitboard ^= 1 << square,
         }
         self.bitboard ^= 1 << square;
 
         if let Some(board_index) = self.check_board_clear(square) {
-            match self.state.player_turn {
+            match self.state.turn {
                 Symbol::Cross => self.state.white_clear ^= 1 << board_index,
                 Symbol::Circle => self.state.black_clear ^= 1 << board_index,
             }
@@ -198,7 +202,11 @@ impl TicTacToe {
             self.state.current_focus = None;
         }
 
-        self.state.player_turn = self.state.player_turn.swap();
+        if self.check_win() {
+            self.winner = Some(self.state.turn.clone())
+        }
+
+        self.state.turn = self.state.turn.swap();
         self.undo_stack[self.ply_index] = undo;
         self.ply_index += 1;
     }
@@ -206,15 +214,16 @@ impl TicTacToe {
     pub fn unmake(&mut self, square: u8) {
         self.ply_index -= 1;
         let undo = self.undo_stack[self.ply_index];
-        self.state.player_turn = self.state.player_turn.swap();
+        self.state.turn = self.state.turn.swap();
 
         // revert the states with the undo
         self.state.all_clear = undo.all_clear;
         self.state.black_clear = undo.black_clear;
         self.state.white_clear = undo.white_clear;
         self.state.current_focus = undo.current_focus;
+        self.winner = None;
 
-        match self.state.player_turn {
+        match self.state.turn {
             Symbol::Cross => self.white_bitboard ^= 1 << square,
             Symbol::Circle => self.black_bitboard ^= 1 << square,
         }
@@ -226,7 +235,7 @@ impl TicTacToe {
     /// Doesn't return a bitboard.
     fn check_board_clear(&mut self, square: u8) -> Option<u8> {
         let base = CELL_TO_SUBBOARD_BASE[square as usize];
-        let mask = match self.state.player_turn {
+        let mask = match self.state.turn {
             Symbol::Cross => self.white_bitboard,
             Symbol::Circle => self.black_bitboard,
         };
@@ -248,7 +257,7 @@ impl TicTacToe {
     /// Used as a helper after a make move\
     /// Returns true if a player cleared 3 aligned boards.
     pub fn check_win(&self) -> bool {
-        let mask = match self.state.player_turn {
+        let mask = match self.state.turn {
             Symbol::Cross => self.state.white_clear,
             Symbol::Circle => self.state.black_clear,
         } as u16;

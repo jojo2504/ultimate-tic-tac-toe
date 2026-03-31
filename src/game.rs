@@ -26,7 +26,7 @@ pub fn start_random_game() {
 
     println!(
         "{:?} {:?} won: \n{}",
-        game.state.player_turn.swap(),
+        game.state.turn.swap(),
         game.state.last_move.unwrap(),
         game
     );
