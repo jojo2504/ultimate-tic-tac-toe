@@ -257,7 +257,7 @@ impl TicTacToe {
     /// Used as a helper after a make move\
     /// Returns true if a player cleared 3 aligned boards.
     pub fn check_win(&self) -> bool {
-        let mask = match self.state.turn.swap() {
+        let mask = match self.state.turn {
             Symbol::Cross => self.state.white_clear,
             Symbol::Circle => self.state.black_clear,
         } as u16;

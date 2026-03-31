@@ -4,7 +4,7 @@ use rand::random_range;
 pub fn start_random_game() {
     let mut game = TicTacToe::new();
 
-    while !game.check_win() {
+    while game.winner.is_none() {
         let moves: u128 = generate_moves(&game);
         let count = moves.count_ones();
         if count == 0 {
@@ -26,7 +26,7 @@ pub fn start_random_game() {
 
     println!(
         "{:?} {:?} won: \n{}",
-        game.state.turn.swap(),
+        game.winner,
         game.state.last_move.unwrap(),
         game
     );
