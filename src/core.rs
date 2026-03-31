@@ -1,6 +1,9 @@
 use std::fmt;
 
-const CELL_TO_SUBBOARD: [u8; 81] = {
+use colored::Colorize;
+
+/// Map the cell index to a subboard index
+pub const CELL_TO_SUBBOARD_INDEX: [u8; 81] = {
     let mut arr = [0u8; 81];
     let map: [u8; 9] = [0, 3, 6, 27, 30, 33, 54, 57, 60];
     let mut i = 0;
@@ -19,6 +22,73 @@ const CELL_TO_SUBBOARD: [u8; 81] = {
     }
     arr
 };
+
+/// Map the cell index to a subboard first square index
+///
+/// Example:\
+/// 1 -> 0, 10 -> 1, 4 -> 2
+pub const CELL_TO_SUBBOARD_BASE: [u8; 81] = {
+    let mut arr = [0u8; 81];
+    let map: [u8; 9] = [0, 3, 6, 27, 30, 33, 54, 57, 60];
+    let mut i = 0;
+    while i < 9 {
+        let base = map[i] as usize;
+        arr[base] = base as u8;
+        arr[base + 1] = base as u8;
+        arr[base + 2] = base as u8;
+        arr[base + 9] = base as u8;
+        arr[base + 10] = base as u8;
+        arr[base + 11] = base as u8;
+        arr[base + 18] = base as u8;
+        arr[base + 19] = base as u8;
+        arr[base + 20] = base as u8;
+        i += 1;
+    }
+    arr
+};
+
+/// ```
+/// let h1 = 0b111u128;
+/// let h2 = 0b111000000000u128;
+/// let h3 = 0b111000000000000000000u128;
+/// let v1 = 0b1000000001000000001u128;
+/// let v2 = 0b10000000010000000010u128;
+/// let v3 = 0b100000000100000000100u128;
+/// let diag = 0b100000000010000000001u128;
+/// let anti_diag = 0b1000000010000000100u128;
+/// /// ```
+pub const CHECKERS: [u128; 8] = [
+    0b111u128,
+    0b111000000000u128,
+    0b111000000000000000000u128,
+    0b1000000001000000001u128,
+    0b10000000010000000010u128,
+    0b100000000100000000100u128,
+    0b100000000010000000001u128,
+    0b1000000010000000100u128,
+];
+
+/// ```
+/// let h1 = 0b111u128;
+/// let h2 = 0b111000000000u128;
+/// let h3 = 0b111000000000000000000u128;
+/// let v1 = 0b1000000001000000001u128;
+/// let v2 = 0b10000000010000000010u128;
+/// let v3 = 0b100000000100000000100u128;
+/// let diag = 0b100000000010000000001u128;
+/// let anti_diag = 0b1000000010000000100u128;
+/// ```
+/// Need to be at least u16 to contains 9 bits
+pub const FINAL_CHECKERS: [u16; 8] = [
+    0b111u16,
+    0b111000u16,
+    0b111000000u16,
+    0b1001001u16,
+    0b10010010u16,
+    0b100100100u16,
+    0b100010001u16,
+    0b1010100u16,
+];
 
 #[derive(Debug, Default)]
 pub enum Color {
@@ -94,7 +164,7 @@ impl TicTacToe {
         }
         self.bitboard ^= 1 << square;
 
-        if let Some(bit_index) = self.check_board_clear() {
+        if let Some(bit_index) = self.check_board_clear(square) {
             match self.state.player_turn {
                 Color::White => self.state.white_clear ^= bit_index,
                 Color::Black => self.state.black_clear ^= bit_index,
@@ -123,25 +193,67 @@ impl TicTacToe {
             Color::Black => self.black_bitboard ^= 1 << square,
         }
         self.bitboard ^= 1 << square;
-
-        todo!()
     }
 
     /// Used as a helper during a make move\
     /// Returns the nth bit 0 to 8 of the current cleared board.
-    fn check_board_clear(&self) -> Option<u8> {
-        todo!()
+    fn check_board_clear(&self, square: u8) -> Option<u8> {
+        let base = CELL_TO_SUBBOARD_BASE[square as usize];
+        let mask = match self.state.player_turn {
+            Color::White => self.white_bitboard,
+            Color::Black => self.black_bitboard,
+        };
+        if CHECKERS
+            .iter()
+            .any(|checker| mask & (checker << base) == (checker << base))
+        {
+            return Some(square);
+        }
+        None
     }
 
     /// Used as a helper after a make move\
     /// Returns true if a player cleared 3 aligned boards.
     pub fn check_win(&self) -> bool {
-        todo!()
+        let mask = match self.state.player_turn {
+            Color::White => self.state.white_clear,
+            Color::Black => self.state.black_clear,
+        } as u16;
+        FINAL_CHECKERS
+            .iter()
+            .any(|checker| mask & checker == *checker)
     }
 }
 
 impl fmt::Display for TicTacToe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        for row in 0..9 {
+            for col in 0..9 {
+                let bit = row * 9 + col;
+                let mask = 1u128 << bit;
+
+                let cell = if self.white_bitboard & mask != 0 {
+                    " X ".white().on_blue().bold()
+                } else if self.black_bitboard & mask != 0 {
+                    " O ".black().on_red().bold()
+                } else {
+                    " . ".dimmed()
+                };
+
+                write!(f, "{}", cell)?;
+
+                // vertical separator between 3x3 boxes
+                if col == 2 || col == 5 {
+                    write!(f, "{}", "|".dimmed())?;
+                }
+            }
+            writeln!(f)?;
+
+            // horizontal separator between 3x3 boxes
+            if row == 2 || row == 5 {
+                writeln!(f, "{}", "- - - - - - - - - - - - - - -".dimmed())?;
+            }
+        }
+        Ok(())
     }
 }
