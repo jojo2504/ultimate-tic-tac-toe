@@ -151,7 +151,7 @@ pub struct TicTacToe {
     pub black_bitboard: u128,
     pub state: State,
     /// Used to keep track of all undo needed to restore the state in the unmake function.
-    pub undo_stack: Box<[Undo; 5096]>,
+    pub undo_stack: Box<[Undo; 81]>,
     /// Used to index the state_stack, representing the current ply, equivalent to a half-move.
     pub ply_index: usize,
     pub zobrist_key: u128,
@@ -165,7 +165,7 @@ impl TicTacToe {
             white_bitboard: 0,
             black_bitboard: 0,
             state: State::default(),
-            undo_stack: Box::new([Undo::default(); 5096]),
+            undo_stack: Box::new([Undo::default(); 81]),
             ply_index: 0,
             zobrist_key: 0,
             winner: None,
@@ -257,7 +257,7 @@ impl TicTacToe {
     /// Used as a helper after a make move\
     /// Returns true if a player cleared 3 aligned boards.
     pub fn check_win(&self) -> bool {
-        let mask = match self.state.turn {
+        let mask = match self.state.turn.swap() {
             Symbol::Cross => self.state.white_clear,
             Symbol::Circle => self.state.black_clear,
         } as u16;
