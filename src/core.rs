@@ -2,13 +2,17 @@ use std::fmt;
 
 use colored::Colorize;
 
-/// Map the cell index to a subboard index
+pub const MAP: [u8; 9] = [0, 3, 6, 27, 30, 33, 54, 57, 60];
+pub const WINDOW: u128 = 0b000000111000000111000000111; // the top left sub board
+
+/// Map the cell index to a subboard index\
+/// Example:\
+/// 1 -> 0, 10 -> 1, 4 -> 2
 pub const CELL_TO_SUBBOARD_INDEX: [u8; 81] = {
     let mut arr = [0u8; 81];
-    let map: [u8; 9] = [0, 3, 6, 27, 30, 33, 54, 57, 60];
     let mut i = 0;
     while i < 9 {
-        let base = map[i] as usize;
+        let base = MAP[i] as usize;
         arr[base] = i as u8;
         arr[base + 1] = i as u8;
         arr[base + 2] = i as u8;
@@ -24,15 +28,11 @@ pub const CELL_TO_SUBBOARD_INDEX: [u8; 81] = {
 };
 
 /// Map the cell index to a subboard first square index
-///
-/// Example:\
-/// 1 -> 0, 10 -> 1, 4 -> 2
 pub const CELL_TO_SUBBOARD_BASE: [u8; 81] = {
     let mut arr = [0u8; 81];
-    let map: [u8; 9] = [0, 3, 6, 27, 30, 33, 54, 57, 60];
     let mut i = 0;
     while i < 9 {
-        let base = map[i] as usize;
+        let base = MAP[i] as usize;
         arr[base] = base as u8;
         arr[base + 1] = base as u8;
         arr[base + 2] = base as u8;
@@ -42,6 +42,26 @@ pub const CELL_TO_SUBBOARD_BASE: [u8; 81] = {
         arr[base + 18] = base as u8;
         arr[base + 19] = base as u8;
         arr[base + 20] = base as u8;
+        i += 1;
+    }
+    arr
+};
+
+/// Map the cell index to a subboard for focusing
+pub const CELL_TO_SUBBOARD_FOCUS: [u8; 81] = {
+    let mut arr = [0u8; 81];
+    let mut i = 0;
+    while i < 9 {
+        let base = MAP[i] as usize;
+        arr[base] = 0 as u8;
+        arr[base + 1] = 1 as u8;
+        arr[base + 2] = 2 as u8;
+        arr[base + 9] = 3 as u8;
+        arr[base + 10] = 4 as u8;
+        arr[base + 11] = 5 as u8;
+        arr[base + 18] = 6 as u8;
+        arr[base + 19] = 7 as u8;
+        arr[base + 20] = 8 as u8;
         i += 1;
     }
     arr
@@ -91,37 +111,37 @@ pub const FINAL_CHECKERS: [u16; 8] = [
 ];
 
 #[derive(Debug, Default)]
-pub enum Color {
+pub enum Symbol {
     #[default]
-    White,
-    Black,
+    Cross,
+    Circle,
 }
 
-impl Color {
+impl Symbol {
     pub fn swap(&self) -> Self {
         match self {
-            Color::White => Color::Black,
-            Color::Black => Color::White,
+            Symbol::Cross => Symbol::Circle,
+            Symbol::Circle => Symbol::Cross,
         }
     }
 }
 
 #[derive(Default)]
 pub struct State {
-    pub all_clear: u8,   // 0 if not cleared, else 1
-    pub white_clear: u8, // 1s for each sub board cleared by white
-    pub black_clear: u8, // 1s for each sub board cleared by black
-    pub player_turn: Color,
+    pub all_clear: u16,   // 0 if not cleared, else 1
+    pub white_clear: u16, // 1s for each sub board cleared by white
+    pub black_clear: u16, // 1s for each sub board cleared by black
+    pub player_turn: Symbol,
     pub last_move: Option<u8>,     // index of the nth bits played
     pub current_focus: Option<u8>, // the forced board to play on, None if impossible giving a free board focus
 }
 
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Undo {
-    pub all_clear: u8,   // 0 if not cleared, else 1
-    pub white_clear: u8, // 1s for each sub board cleared by white
-    pub black_clear: u8, // 1s for each sub board cleared by black
-    pub current_focus: Option<u8>,
+    pub all_clear: u16,            // 0 if not cleared, else 1
+    pub white_clear: u16,          // 1s for each sub board cleared by white
+    pub black_clear: u16,          // 1s for each sub board cleared by black
+    pub current_focus: Option<u8>, // index of the focused bitboard
 }
 
 /// The first 47 (128 - 91) bits will never be used on this bitboard
@@ -159,17 +179,23 @@ impl TicTacToe {
         };
 
         match self.state.player_turn {
-            Color::White => self.white_bitboard ^= 1 << square,
-            Color::Black => self.black_bitboard ^= 1 << square,
+            Symbol::Cross => self.white_bitboard ^= 1 << square,
+            Symbol::Circle => self.black_bitboard ^= 1 << square,
         }
         self.bitboard ^= 1 << square;
 
-        if let Some(bit_index) = self.check_board_clear(square) {
+        if let Some(board_index) = self.check_board_clear(square) {
             match self.state.player_turn {
-                Color::White => self.state.white_clear ^= bit_index,
-                Color::Black => self.state.black_clear ^= bit_index,
+                Symbol::Cross => self.state.white_clear ^= 1 << board_index,
+                Symbol::Circle => self.state.black_clear ^= 1 << board_index,
             }
-            self.state.all_clear ^= bit_index;
+            self.state.all_clear ^= 1 << board_index;
+        }
+
+        if (1u16 << CELL_TO_SUBBOARD_FOCUS[square as usize]) & self.state.all_clear as u16 == 0 {
+            self.state.current_focus = Some(CELL_TO_SUBBOARD_FOCUS[square as usize]);
+        } else {
+            self.state.current_focus = None;
         }
 
         self.state.player_turn = self.state.player_turn.swap();
@@ -189,26 +215,33 @@ impl TicTacToe {
         self.state.current_focus = undo.current_focus;
 
         match self.state.player_turn {
-            Color::White => self.white_bitboard ^= 1 << square,
-            Color::Black => self.black_bitboard ^= 1 << square,
+            Symbol::Cross => self.white_bitboard ^= 1 << square,
+            Symbol::Circle => self.black_bitboard ^= 1 << square,
         }
         self.bitboard ^= 1 << square;
     }
 
     /// Used as a helper during a make move\
-    /// Returns the nth bit 0 to 8 of the current cleared board.
-    fn check_board_clear(&self, square: u8) -> Option<u8> {
+    /// Returns the nth bit 0 to 8 of the current cleared board.\
+    /// Doesn't return a bitboard.
+    fn check_board_clear(&mut self, square: u8) -> Option<u8> {
         let base = CELL_TO_SUBBOARD_BASE[square as usize];
         let mask = match self.state.player_turn {
-            Color::White => self.white_bitboard,
-            Color::Black => self.black_bitboard,
+            Symbol::Cross => self.white_bitboard,
+            Symbol::Circle => self.black_bitboard,
         };
         if CHECKERS
             .iter()
             .any(|checker| mask & (checker << base) == (checker << base))
         {
-            return Some(square);
+            return Some(CELL_TO_SUBBOARD_INDEX[square as usize]);
         }
+
+        let subboard_mask = WINDOW << MAP[CELL_TO_SUBBOARD_INDEX[square as usize] as usize];
+        if (subboard_mask & self.bitboard).count_ones() == 9 {
+            self.state.all_clear ^= 1 << CELL_TO_SUBBOARD_INDEX[square as usize]
+        }
+
         None
     }
 
@@ -216,8 +249,8 @@ impl TicTacToe {
     /// Returns true if a player cleared 3 aligned boards.
     pub fn check_win(&self) -> bool {
         let mask = match self.state.player_turn {
-            Color::White => self.state.white_clear,
-            Color::Black => self.state.black_clear,
+            Symbol::Cross => self.state.white_clear,
+            Symbol::Circle => self.state.black_clear,
         } as u16;
         FINAL_CHECKERS
             .iter()
@@ -227,11 +260,16 @@ impl TicTacToe {
 
 impl fmt::Display for TicTacToe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for row in 0..9 {
-            for col in 0..9 {
-                let bit = row * 9 + col;
-                let mask = 1u128 << bit;
+        writeln!(f, "{}", "      0  1  2   3  4  5   6  7  8".dimmed())?;
+        writeln!(f, "{}", "    ┌─────────┬─────────┬─────────┐".dimmed())?;
 
+        for row in 0..9 {
+            let row_start = row * 9;
+            write!(f, "{}", format!("{:2}  │", row_start).dimmed())?;
+
+            for col in 0..9 {
+                let bit = row_start + col;
+                let mask = 1u128 << bit;
                 let cell = if self.white_bitboard & mask != 0 {
                     " X ".white().on_blue().bold()
                 } else if self.black_bitboard & mask != 0 {
@@ -239,21 +277,19 @@ impl fmt::Display for TicTacToe {
                 } else {
                     " . ".dimmed()
                 };
-
                 write!(f, "{}", cell)?;
-
-                // vertical separator between 3x3 boxes
                 if col == 2 || col == 5 {
-                    write!(f, "{}", "|".dimmed())?;
+                    write!(f, "{}", "│".dimmed())?;
                 }
             }
+            write!(f, "{}", "│".dimmed())?;
             writeln!(f)?;
 
-            // horizontal separator between 3x3 boxes
             if row == 2 || row == 5 {
-                writeln!(f, "{}", "- - - - - - - - - - - - - - -".dimmed())?;
+                writeln!(f, "{}", "    ├─────────┼─────────┼─────────┤".dimmed())?;
             }
         }
+        writeln!(f, "{}", "    └─────────┴─────────┴─────────┘".dimmed())?;
         Ok(())
     }
 }
