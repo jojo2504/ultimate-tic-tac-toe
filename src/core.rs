@@ -135,9 +135,8 @@ impl From<Symbol> for i32 {
 
 #[derive(Default)]
 pub struct State {
-    pub all_clear: u16,   // 0 if not cleared, else 1
-    pub white_clear: u16, // 1s for each sub board cleared by white
-    pub black_clear: u16, // 1s for each sub board cleared by black
+    pub all_clear: u16,  // 0 if not cleared, else 1
+    pub side_clear: u16, // 1s for each sub board cleared by white and black alternatively
     pub turn: Symbol,
     pub last_move: Option<u8>,     // index of the nth bits played
     pub current_focus: Option<u8>, // the forced board to play on, None if impossible giving a free board focus
@@ -145,17 +144,15 @@ pub struct State {
 
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Undo {
-    pub all_clear: u16,            // 0 if not cleared, else 1
-    pub white_clear: u16,          // 1s for each sub board cleared by white
-    pub black_clear: u16,          // 1s for each sub board cleared by black
+    pub all_clear: u16, // 0 if not cleared, else 1
+    pub side_clear: u16,
     pub current_focus: Option<u8>, // index of the focused bitboard
 }
 
 /// The first 47 (128 - 91) bits will never be used on this bitboard
 pub struct TicTacToe {
     pub bitboard: u128,
-    pub white_bitboard: u128,
-    pub black_bitboard: u128,
+    pub side_bitboard: u128,
     pub state: State,
     /// Used to keep track of all undo needed to restore the state in the unmake function.
     pub undo_stack: Box<[Undo; 81]>,
@@ -169,8 +166,7 @@ impl TicTacToe {
     pub fn new() -> Self {
         Self {
             bitboard: 0,
-            white_bitboard: 0,
-            black_bitboard: 0,
+            side_bitboard: 0,
             state: State::default(),
             undo_stack: Box::new([Undo::default(); 81]),
             ply_index: 0,
@@ -184,37 +180,28 @@ impl TicTacToe {
 
         let undo = Undo {
             all_clear: self.state.all_clear,
-            white_clear: self.state.white_clear,
-            black_clear: self.state.black_clear,
+            side_clear: self.state.side_clear,
             current_focus: self.state.current_focus,
         };
 
-        match self.state.turn {
-            Symbol::Cross => self.white_bitboard ^= 1 << square,
-            Symbol::Circle => self.black_bitboard ^= 1 << square,
-        }
+        self.side_bitboard ^= self.bitboard;
         self.bitboard ^= 1 << square;
+        self.zobrist_key ^=
+            ZOBRIST_TABLE.token_square[Zobrist::get_index((square, self.state.turn.clone()))];
 
         if let Some(board_index) = self.check_board_clear(square) {
-            match self.state.turn {
-                Symbol::Cross => self.state.white_clear ^= 1 << board_index,
-                Symbol::Circle => self.state.black_clear ^= 1 << board_index,
-            }
-            self.state.all_clear ^= 1 << board_index;
+            self.state.side_clear ^= 1 << board_index;
         }
+        self.state.side_clear ^= self.state.all_clear;
 
-        if (1u16 << CELL_TO_SUBBOARD_FOCUS[square as usize]) & self.state.all_clear as u16 == 0 {
-            self.state.current_focus = Some(CELL_TO_SUBBOARD_FOCUS[square as usize]);
-        } else {
-            self.state.current_focus = None;
-        }
+        self.state.current_focus =
+            ((1u16 << CELL_TO_SUBBOARD_FOCUS[square as usize]) & self.state.all_clear as u16 == 0)
+                .then_some(CELL_TO_SUBBOARD_FOCUS[square as usize]);
 
         if self.check_win() {
             self.winner = Some(self.state.turn.clone())
         }
 
-        self.zobrist_key ^=
-            ZOBRIST_TABLE.token_square[Zobrist::get_index((square, self.state.turn.clone()))];
         self.state.turn = self.state.turn.swap();
         self.undo_stack[self.ply_index] = undo;
         self.ply_index += 1;
@@ -227,18 +214,15 @@ impl TicTacToe {
 
         // revert the states with the undo
         self.state.all_clear = undo.all_clear;
-        self.state.black_clear = undo.black_clear;
-        self.state.white_clear = undo.white_clear;
+        self.state.side_clear = undo.side_clear;
         self.state.current_focus = undo.current_focus;
-        self.winner = None;
 
-        match self.state.turn {
-            Symbol::Cross => self.white_bitboard ^= 1 << square,
-            Symbol::Circle => self.black_bitboard ^= 1 << square,
-        }
         self.bitboard ^= 1 << square;
+        self.side_bitboard ^= self.bitboard;
         self.zobrist_key ^=
             ZOBRIST_TABLE.token_square[Zobrist::get_index((square, self.state.turn.clone()))];
+
+        self.winner = None;
     }
 
     /// Used as a helper during a make move\
@@ -246,10 +230,7 @@ impl TicTacToe {
     /// Doesn't return a bitboard.
     fn check_board_clear(&mut self, square: u8) -> Option<u8> {
         let base = CELL_TO_SUBBOARD_BASE[square as usize];
-        let mask = match self.state.turn {
-            Symbol::Cross => self.white_bitboard,
-            Symbol::Circle => self.black_bitboard,
-        };
+        let mask = &self.side_bitboard;
         if CHECKERS
             .iter()
             .any(|checker| mask & (checker << base) == (checker << base))
@@ -268,10 +249,7 @@ impl TicTacToe {
     /// Used as a helper after a make move\
     /// Returns true if a player cleared 3 aligned boards.
     pub fn check_win(&self) -> bool {
-        let mask = match self.state.turn {
-            Symbol::Cross => self.state.white_clear,
-            Symbol::Circle => self.state.black_clear,
-        } as u16;
+        let mask = &self.state.side_clear;
         FINAL_CHECKERS
             .iter()
             .any(|checker| mask & checker == *checker)
@@ -280,6 +258,12 @@ impl TicTacToe {
 
 impl fmt::Display for TicTacToe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (cross, circle): (u128, u128) = match self.ply_index & 1 {
+            0 => (self.side_bitboard, self.side_bitboard ^ self.bitboard),
+            1 => (self.side_bitboard ^ self.bitboard, self.side_bitboard),
+            _ => unreachable!(),
+        };
+
         writeln!(f, "{}", "      0  1  2   3  4  5   6  7  8".dimmed())?;
         writeln!(f, "{}", "    ┌─────────┬─────────┬─────────┐".dimmed())?;
 
@@ -290,9 +274,9 @@ impl fmt::Display for TicTacToe {
             for col in 0..9 {
                 let bit = row_start + col;
                 let mask = 1u128 << bit;
-                let cell = if self.white_bitboard & mask != 0 {
+                let cell = if cross & mask != 0 {
                     " X ".white().on_blue().bold()
-                } else if self.black_bitboard & mask != 0 {
+                } else if circle & mask != 0 {
                     " O ".black().on_red().bold()
                 } else {
                     " . ".dimmed()
@@ -342,6 +326,6 @@ impl Zobrist {
             _ => unreachable!(),
         };
 
-        (offset as u8 * 91 + play.0) as usize
+        (offset as u8 * 81 + play.0) as usize
     }
 }
