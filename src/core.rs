@@ -1,6 +1,7 @@
-use std::fmt;
-
 use colored::Colorize;
+use once_cell::sync::Lazy;
+use rand::random;
+use std::fmt;
 
 pub const MAP: [u8; 9] = [0, 3, 6, 27, 30, 33, 54, 57, 60];
 pub const WINDOW: u128 = 0b000000111000000111000000111; // the top left sub board
@@ -115,6 +116,15 @@ pub enum Symbol {
     #[default]
     Cross,
     Circle,
+}
+
+impl Symbol {
+    pub fn to_int(&self) -> i32 {
+        match self {
+            Symbol::Cross => 1,
+            Symbol::Circle => -1,
+        }
+    }
 }
 
 impl Symbol {
@@ -300,5 +310,38 @@ impl fmt::Display for TicTacToe {
         }
         writeln!(f, "{}", "    └─────────┴─────────┴─────────┘".dimmed())?;
         Ok(())
+    }
+}
+
+struct Zobrist {
+    token_square: [u128; 81 * 2], // 42 * 2
+}
+
+impl Default for Zobrist {
+    fn default() -> Self {
+        Self {
+            token_square: [0u128; 81 * 2],
+        }
+    }
+}
+
+static ZOBRIST_TABLE: Lazy<Zobrist> = Lazy::new(|| {
+    let mut z = Zobrist::default();
+    for i in 0..z.token_square.len() {
+        z.token_square[i] = random();
+    }
+    z
+});
+
+impl Zobrist {
+    fn get_index(play: (u128, Symbol)) -> u128 {
+        let raw_u128: u128 = play.0.into();
+        let offset = match play.1.to_int() {
+            1 => 0,
+            -1 => 1,
+            _ => unreachable!(),
+        };
+
+        offset as u128 * 91 + raw_u128.trailing_zeros() as u128
     }
 }
