@@ -114,17 +114,8 @@ pub const FINAL_CHECKERS: [u16; 8] = [
 #[derive(Debug, Default, Clone)]
 pub enum Symbol {
     #[default]
-    Cross,
-    Circle,
-}
-
-impl Symbol {
-    pub fn to_int(&self) -> i32 {
-        match self {
-            Symbol::Cross => 1,
-            Symbol::Circle => -1,
-        }
-    }
+    Cross = 1,
+    Circle = -1,
 }
 
 impl Symbol {
@@ -133,6 +124,12 @@ impl Symbol {
             Symbol::Cross => Symbol::Circle,
             Symbol::Circle => Symbol::Cross,
         }
+    }
+}
+
+impl From<Symbol> for i32 {
+    fn from(s: Symbol) -> i32 {
+        s as i32
     }
 }
 
@@ -216,6 +213,8 @@ impl TicTacToe {
             self.winner = Some(self.state.turn.clone())
         }
 
+        self.zobrist_key ^=
+            ZOBRIST_TABLE.token_square[Zobrist::get_index((square, self.state.turn.clone()))];
         self.state.turn = self.state.turn.swap();
         self.undo_stack[self.ply_index] = undo;
         self.ply_index += 1;
@@ -238,6 +237,8 @@ impl TicTacToe {
             Symbol::Circle => self.black_bitboard ^= 1 << square,
         }
         self.bitboard ^= 1 << square;
+        self.zobrist_key ^=
+            ZOBRIST_TABLE.token_square[Zobrist::get_index((square, self.state.turn.clone()))];
     }
 
     /// Used as a helper during a make move\
@@ -334,14 +335,13 @@ static ZOBRIST_TABLE: Lazy<Zobrist> = Lazy::new(|| {
 });
 
 impl Zobrist {
-    fn get_index(play: (u128, Symbol)) -> u128 {
-        let raw_u128: u128 = play.0.into();
-        let offset = match play.1.to_int() {
+    fn get_index(play: (u8, Symbol)) -> usize {
+        let offset = match play.1.clone() as i32 {
             1 => 0,
             -1 => 1,
             _ => unreachable!(),
         };
 
-        offset as u128 * 91 + raw_u128.trailing_zeros() as u128
+        (offset as u8 * 91 + play.0) as usize
     }
 }
