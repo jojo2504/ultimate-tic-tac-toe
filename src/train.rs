@@ -1,3 +1,5 @@
+use std::io::{BufWriter, Write};
+
 use bincode::{Encode, config};
 
 use crate::{core::TicTacToe, game::random_game};
@@ -14,7 +16,16 @@ pub fn generate_databin() -> anyhow::Result<()> {
         let mut game = TicTacToe::new();
         all_samples.extend(random_game(&mut game));
     }
-    let bytes = bincode::encode_to_vec(&all_samples, config::standard()).unwrap();
-    std::fs::write("databin/gen0_data.bin", bytes)?;
+
+    let file = std::fs::File::create("databin/gen0_data.bin")?;
+    let mut writer = BufWriter::new(file);
+
+    for s in &all_samples {
+        for f in &s.features {
+            writer.write_all(&f.to_le_bytes())?;
+        }
+        writer.write_all(&s.outcome.to_le_bytes())?;
+    }
+    writer.flush()?;
     Ok(())
 }
