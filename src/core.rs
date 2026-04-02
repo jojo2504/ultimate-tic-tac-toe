@@ -176,35 +176,39 @@ impl TicTacToe {
     }
 
     pub fn make(&mut self, square: u8) {
-        self.state.last_move = Some(square);
-
         let undo = Undo {
             all_clear: self.state.all_clear,
             side_clear: self.state.side_clear,
             current_focus: self.state.current_focus,
         };
+        self.undo_stack[self.ply_index] = undo;
 
-        self.side_bitboard ^= self.bitboard;
+        self.play(square);
+        if self.check_win() {
+            self.winner = Some(self.state.turn.clone());
+        }
+
+        self.state.turn = self.state.turn.swap();
+        self.ply_index += 1;
+    }
+
+    fn play(&mut self, square: u8) {
+        self.state.last_move = Some(square);
+
         self.bitboard ^= 1 << square;
+        self.side_bitboard ^= self.bitboard;
+
         self.zobrist_key ^=
             ZOBRIST_TABLE.token_square[Zobrist::get_index((square, self.state.turn.clone()))];
 
         if let Some(board_index) = self.check_board_clear(square) {
-            self.state.side_clear ^= 1 << board_index;
+            self.state.all_clear ^= 1 << board_index;
         }
         self.state.side_clear ^= self.state.all_clear;
 
         self.state.current_focus =
             ((1u16 << CELL_TO_SUBBOARD_FOCUS[square as usize]) & self.state.all_clear as u16 == 0)
                 .then_some(CELL_TO_SUBBOARD_FOCUS[square as usize]);
-
-        if self.check_win() {
-            self.winner = Some(self.state.turn.clone())
-        }
-
-        self.state.turn = self.state.turn.swap();
-        self.undo_stack[self.ply_index] = undo;
-        self.ply_index += 1;
     }
 
     pub fn unmake(&mut self, square: u8) {
@@ -238,9 +242,9 @@ impl TicTacToe {
             return Some(CELL_TO_SUBBOARD_INDEX[square as usize]);
         }
 
-        let subboard_mask = WINDOW << MAP[CELL_TO_SUBBOARD_INDEX[square as usize] as usize];
-        if (subboard_mask & self.bitboard).count_ones() == 9 {
-            self.state.all_clear ^= 1 << CELL_TO_SUBBOARD_INDEX[square as usize]
+        let mask = WINDOW << MAP[CELL_TO_SUBBOARD_INDEX[square as usize] as usize];
+        if mask & self.bitboard == mask {
+            self.state.all_clear ^= 1 << CELL_TO_SUBBOARD_INDEX[square as usize];
         }
 
         None
@@ -254,11 +258,75 @@ impl TicTacToe {
             .iter()
             .any(|checker| mask & checker == *checker)
     }
+
+    pub fn is_full(&self) -> bool {
+        self.state.all_clear == 0b111111111
+    }
+
+    pub fn to_features(&self) -> [f32; 200] {
+        let mut features = [0.0f32; 200];
+
+        // Determine which bitboard belongs to whom based on ply parity
+        let (current_bb, opponent_bb, current_clear, opponent_clear) = match self.ply_index & 1 {
+            0 => (
+                self.side_bitboard,
+                self.side_bitboard ^ self.bitboard,
+                self.state.side_clear,
+                self.state.side_clear ^ (self.state.all_clear as u16),
+            ),
+            1 => (
+                self.side_bitboard ^ self.bitboard,
+                self.side_bitboard,
+                self.state.side_clear ^ (self.state.all_clear as u16),
+                self.state.side_clear,
+            ),
+            _ => unreachable!(),
+        };
+
+        // 81 bits — current player raw bitboard
+        for i in 0..81 {
+            features[i] = ((current_bb >> i) & 1) as f32;
+        }
+
+        // 81 bits — opponent raw bitboard
+        for i in 0..81 {
+            features[81 + i] = ((opponent_bb >> i) & 1) as f32;
+        }
+
+        // 9 bits — current player cleared sub-boards (meta board)
+        for i in 0..9 {
+            features[162 + i] = ((current_clear >> i) & 1) as f32;
+        }
+
+        // 9 bits — opponent cleared sub-boards (meta board)
+        for i in 0..9 {
+            features[171 + i] = ((opponent_clear >> i) & 1) as f32;
+        }
+
+        // 9 bits — all_clear (dead/drawn sub-boards)
+        for i in 0..9 {
+            features[180 + i] = ((self.state.all_clear >> i) & 1) as f32;
+        }
+
+        // 10 bits — current_focus as one-hot + free choice flag
+        match self.state.current_focus {
+            Some(focus) => {
+                features[189 + focus as usize] = 1.0; // one-hot
+                features[199] = 0.0; // not free
+            }
+            None => {
+                // all focus bits stay 0, free choice flag = 1
+                features[199] = 1.0;
+            }
+        }
+
+        features
+    }
 }
 
 impl fmt::Display for TicTacToe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (cross, circle): (u128, u128) = match self.ply_index & 1 {
+        let (circle, cross): (u128, u128) = match self.ply_index & 1 {
             0 => (self.side_bitboard, self.side_bitboard ^ self.bitboard),
             1 => (self.side_bitboard ^ self.bitboard, self.side_bitboard),
             _ => unreachable!(),

@@ -1,0 +1,4 @@
+# Ignore everything except self
+# This direectly is used to store data.bin for training purposes.
+**
+!.gitignore

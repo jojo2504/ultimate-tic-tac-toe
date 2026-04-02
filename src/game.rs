@@ -1,27 +1,11 @@
-use crate::{core::TicTacToe, movegen::generate_moves};
-use rand::random_range;
+use crate::{core::TicTacToe, movegen::generate_random_legal_move, train::Sample};
 
 pub fn start_random_game() {
     let mut game = TicTacToe::new();
 
-    while game.winner.is_none() {
-        let moves: u128 = generate_moves(&game);
-        let count = moves.count_ones();
-        if count == 0 {
-            println!("draw");
-            return;
-        }
-        let pick = random_range(0..count);
-
-        // skip `pick` set bits
-        let mut remaining = moves;
-        for _ in 0..pick {
-            remaining &= remaining - 1; // clear lowest set bit
-        }
-        let random_move = 1u128 << remaining.trailing_zeros();
-        let random_move_index = random_move.trailing_zeros();
+    while game.winner.is_none() && !game.is_full() {
+        let random_move_index = generate_random_legal_move(&game);
         game.make(random_move_index as u8);
-        println!("{}", game);
     }
 
     println!(
@@ -30,4 +14,35 @@ pub fn start_random_game() {
         game.state.last_move.unwrap(),
         game
     );
+}
+
+pub fn random_game(game: &mut TicTacToe) -> Vec<Sample> {
+    let mut samples = vec![];
+
+    while game.winner.is_none() && !game.is_full() {
+        let features = game.to_features();
+        samples.push(Sample {
+            features,
+            outcome: 0.0,
+        }); // outcome filled later
+
+        let mv = generate_random_legal_move(game);
+        game.make(mv);
+    }
+
+    let outcome = match &game.winner {
+        Some(_) => 1.0, // last player to move won
+        None => 0.5,    // draw
+    };
+
+    // alternate perspective per move
+    let n = samples.len();
+    for (i, s) in samples.iter_mut().enumerate() {
+        s.outcome = if (n - i) % 2 == 0 {
+            outcome
+        } else {
+            1.0 - outcome
+        };
+    }
+    samples
 }
