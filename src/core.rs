@@ -1,7 +1,9 @@
 use colored::Colorize;
 use once_cell::sync::Lazy;
 use rand::random;
-use std::fmt;
+use std::{any, fmt};
+
+use crate::train::Sample;
 
 pub const MAP: [u8; 9] = [0, 3, 6, 27, 30, 33, 54, 57, 60];
 pub const WINDOW: u128 = 0b000000111000000111000000111; // the top left sub board
@@ -175,6 +177,17 @@ impl TicTacToe {
         }
     }
 
+    pub fn validate_move(&self, square: u8) -> anyhow::Result<()> {
+        if self.state.all_clear & (1 << CELL_TO_SUBBOARD_INDEX[square as usize]) == 0
+            && (self.bitboard & (1 << square)) == 0
+        {
+            return Ok(());
+        }
+        anyhow::bail!("invalid move");
+    }
+
+    /// Suppose move has already been validated
+    #[inline(always)]
     pub fn make(&mut self, square: u8) {
         let undo = Undo {
             all_clear: self.state.all_clear,
@@ -182,12 +195,7 @@ impl TicTacToe {
             current_focus: self.state.current_focus,
         };
         self.undo_stack[self.ply_index] = undo;
-
         self.play(square);
-        if self.check_win() {
-            self.winner = Some(self.state.turn.clone());
-        }
-
         self.state.turn = self.state.turn.swap();
         self.ply_index += 1;
     }
@@ -257,6 +265,10 @@ impl TicTacToe {
         FINAL_CHECKERS
             .iter()
             .any(|checker| mask & checker == *checker)
+    }
+
+    pub fn check_draw(&self) -> bool {
+        self.winner.is_none() && self.is_full()
     }
 
     pub fn is_full(&self) -> bool {
