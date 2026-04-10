@@ -75,7 +75,7 @@ impl Search {
             }
         }
 
-        if depth == 0 || board.winner.is_some() {
+        if depth == 0 || board.check_win() {
             return color * Evaluation::evaluate(board);
         }
 
@@ -86,6 +86,8 @@ impl Search {
         while child_nodes != 0 {
             let child = 1 << child_nodes.trailing_zeros();
             child_nodes &= child_nodes - 1;
+
+            todo!("implement copy-make");
 
             board.make(child);
             best_score = max(
@@ -99,7 +101,6 @@ impl Search {
                 )
                 .saturating_neg(),
             );
-            board.unmake(child);
 
             alpha = max(alpha, best_score);
             if alpha >= beta {

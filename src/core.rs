@@ -1,13 +1,13 @@
 use crate::constants::{
-    self, CELL_TO_SUBBOARD_BASE, CELL_TO_SUBBOARD_FOCUS, CELL_TO_SUBBOARD_INDEX, CHECKERS,
+    CELL_TO_SUBBOARD_BASE, CELL_TO_SUBBOARD_FOCUS, CELL_TO_SUBBOARD_INDEX, CHECKERS,
     FEATURES_COUNT, FINAL_CHECKERS, MAP, WINDOW,
 };
 use colored::Colorize;
 use once_cell::sync::Lazy;
 use rand::random;
-use std::{any, fmt};
+use std::fmt;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy)]
 pub enum Symbol {
     #[default]
     Cross = 1,
@@ -29,50 +29,27 @@ impl From<Symbol> for i32 {
     }
 }
 
-#[derive(Default)]
-pub struct State {
+#[derive(Default, Clone, Copy)]
+pub struct TicTacToe {
+    // The first 47 (128 - 91) bits will never be used on these bitboards
+    pub bitboard: u128,
+    pub side_bitboard: u128,
     pub all_clear: u16,  // 0 if not cleared, else 1
     pub side_clear: u16, // 1s for each sub board cleared by white and black alternatively
     pub turn: Symbol,
-    pub last_move: Option<u8>,     // index of the nth bits played
     pub current_focus: Option<u8>, // the forced board to play on, None if impossible giving a free board focus
-}
 
-#[derive(Debug, Copy, Clone, Default)]
-pub struct Undo {
-    pub all_clear: u16, // 0 if not cleared, else 1
-    pub side_clear: u16,
-    pub current_focus: Option<u8>, // index of the focused bitboard
-}
-
-/// The first 47 (128 - 91) bits will never be used on this bitboard
-pub struct TicTacToe {
-    pub bitboard: u128,
-    pub side_bitboard: u128,
-    pub state: State,
-    /// Used to keep track of all undo needed to restore the state in the unmake function.
-    pub undo_stack: Box<[Undo; 81]>,
     /// Used to index the state_stack, representing the current ply, equivalent to a half-move.
-    pub ply_index: usize,
     pub zobrist_key: u128,
-    pub winner: Option<Symbol>,
 }
 
 impl TicTacToe {
     pub fn new() -> Self {
-        Self {
-            bitboard: 0,
-            side_bitboard: 0,
-            state: State::default(),
-            undo_stack: Box::new([Undo::default(); 81]),
-            ply_index: 0,
-            zobrist_key: 0,
-            winner: None,
-        }
+        Default::default()
     }
 
     pub fn validate_move(&self, square: u8) -> anyhow::Result<()> {
-        if self.state.all_clear & (1 << CELL_TO_SUBBOARD_INDEX[square as usize]) == 0
+        if self.all_clear & (1 << CELL_TO_SUBBOARD_INDEX[square as usize]) == 0
             && (self.bitboard & (1 << square)) == 0
         {
             return Ok(());
@@ -81,54 +58,22 @@ impl TicTacToe {
     }
 
     /// Suppose move has already been validated
-    #[inline(always)]
     pub fn make(&mut self, square: u8) {
-        let undo = Undo {
-            all_clear: self.state.all_clear,
-            side_clear: self.state.side_clear,
-            current_focus: self.state.current_focus,
-        };
-        self.undo_stack[self.ply_index] = undo;
-        self.play(square);
-        self.state.turn = self.state.turn.swap();
-        self.ply_index += 1;
-    }
-
-    fn play(&mut self, square: u8) {
-        self.state.last_move = Some(square);
-
         self.bitboard ^= 1 << square;
         self.side_bitboard ^= self.bitboard;
 
         self.zobrist_key ^=
-            ZOBRIST_TABLE.token_square[Zobrist::get_index((square, self.state.turn.clone()))];
+            ZOBRIST_TABLE.token_square[Zobrist::get_index((square, self.turn.clone()))];
 
         if let Some(board_index) = self.check_board_clear(square) {
-            self.state.all_clear ^= 1 << board_index;
+            self.all_clear ^= 1 << board_index;
         }
-        self.state.side_clear ^= self.state.all_clear;
+        self.side_clear ^= self.all_clear;
 
-        self.state.current_focus =
-            ((1u16 << CELL_TO_SUBBOARD_FOCUS[square as usize]) & self.state.all_clear as u16 == 0)
+        self.current_focus =
+            ((1u16 << CELL_TO_SUBBOARD_FOCUS[square as usize]) & self.all_clear as u16 == 0)
                 .then_some(CELL_TO_SUBBOARD_FOCUS[square as usize]);
-    }
-
-    pub fn unmake(&mut self, square: u8) {
-        self.ply_index -= 1;
-        let undo = self.undo_stack[self.ply_index];
-        self.state.turn = self.state.turn.swap();
-
-        // revert the states with the undo
-        self.state.all_clear = undo.all_clear;
-        self.state.side_clear = undo.side_clear;
-        self.state.current_focus = undo.current_focus;
-
-        self.bitboard ^= 1 << square;
-        self.side_bitboard ^= self.bitboard;
-        self.zobrist_key ^=
-            ZOBRIST_TABLE.token_square[Zobrist::get_index((square, self.state.turn.clone()))];
-
-        self.winner = None;
+        self.turn = self.turn.swap();
     }
 
     /// Used as a helper during a make move\
@@ -146,7 +91,7 @@ impl TicTacToe {
 
         let mask = WINDOW << MAP[CELL_TO_SUBBOARD_INDEX[square as usize] as usize];
         if mask & self.bitboard == mask {
-            self.state.all_clear ^= 1 << CELL_TO_SUBBOARD_INDEX[square as usize];
+            self.all_clear ^= 1 << CELL_TO_SUBBOARD_INDEX[square as usize];
         }
 
         None
@@ -155,36 +100,38 @@ impl TicTacToe {
     /// Used as a helper after a make move\
     /// Returns true if a player cleared 3 aligned boards.
     pub fn check_win(&self) -> bool {
-        let mask = &self.state.side_clear;
+        let mask = &self.side_clear;
         FINAL_CHECKERS
             .iter()
             .any(|checker| mask & checker == *checker)
     }
 
+    #[inline(always)]
     pub fn check_draw(&self) -> bool {
-        self.winner.is_none() && self.is_full()
+        !self.check_win() && self.is_full()
     }
 
+    #[inline(always)]
     pub fn is_full(&self) -> bool {
-        self.state.all_clear == 0b111111111
+        self.all_clear == 0b111111111
     }
 
     pub fn to_features(&self) -> [f32; FEATURES_COUNT] {
         let mut features = [0.0f32; FEATURES_COUNT];
 
         // Determine which bitboard belongs to whom based on ply parity
-        let (current_bb, opponent_bb, current_clear, opponent_clear) = match self.ply_index & 1 {
-            0 => (
-                self.side_bitboard,
-                self.side_bitboard ^ self.bitboard,
-                self.state.side_clear,
-                self.state.side_clear ^ (self.state.all_clear as u16),
-            ),
+        let (current_bb, opponent_bb, current_clear, opponent_clear) = match self.turn as i32 {
             1 => (
+                self.side_bitboard,
+                self.side_bitboard ^ self.bitboard,
+                self.side_clear,
+                self.side_clear ^ (self.all_clear as u16),
+            ),
+            -1 => (
                 self.side_bitboard ^ self.bitboard,
                 self.side_bitboard,
-                self.state.side_clear ^ (self.state.all_clear as u16),
-                self.state.side_clear,
+                self.side_clear ^ (self.all_clear as u16),
+                self.side_clear,
             ),
             _ => unreachable!(),
         };
@@ -211,11 +158,11 @@ impl TicTacToe {
 
         // 9 bits — all_clear (dead/drawn sub-boards)
         for i in 0..9 {
-            features[180 + i] = ((self.state.all_clear >> i) & 1) as f32;
+            features[180 + i] = ((self.all_clear >> i) & 1) as f32;
         }
 
         // 10 bits — current_focus as one-hot + free choice flag
-        match self.state.current_focus {
+        match self.current_focus {
             Some(focus) => {
                 features[189 + focus as usize] = 1.0; // one-hot
                 features[198] = 0.0; // not free
@@ -232,9 +179,9 @@ impl TicTacToe {
 
 impl fmt::Display for TicTacToe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (circle, cross): (u128, u128) = match self.ply_index & 1 {
-            0 => (self.side_bitboard, self.side_bitboard ^ self.bitboard),
-            1 => (self.side_bitboard ^ self.bitboard, self.side_bitboard),
+        let (circle, cross): (u128, u128) = match self.turn as i32 {
+            1 => (self.side_bitboard, self.side_bitboard ^ self.bitboard),
+            -1 => (self.side_bitboard ^ self.bitboard, self.side_bitboard),
             _ => unreachable!(),
         };
 

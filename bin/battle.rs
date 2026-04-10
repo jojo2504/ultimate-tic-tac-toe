@@ -177,7 +177,7 @@ impl Battle {
         loop {
             let turn = self.game.ply_index % 2; // 0 = X, 1 = O
             let other = 1 - turn;
-            let last = self.game.state.last_move.expect("at least one move played");
+            let last = self.game.last_move.expect("at least one move played");
 
             // send opponent's last square → get this engine's reply
             let cell = self.engines[turn].send_opponent_move(last)?;
