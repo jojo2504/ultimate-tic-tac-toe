@@ -147,6 +147,8 @@ struct Battle {
     game: TicTacToe,
     engines: [Engine; 2], // [0] = X (moves first), [1] = O
     movetime_ms: u64,     // kept for future use / logging
+    ply_index: usize,
+    last_move: Option<u8>,
 }
 
 impl Battle {
@@ -159,6 +161,8 @@ impl Battle {
             game: TicTacToe::new(),
             engines: [e1, e2],
             movetime_ms: 1000,
+            ply_index: 0,
+            last_move: None,
         })
     }
 
@@ -175,9 +179,9 @@ impl Battle {
         }
 
         loop {
-            let turn = self.game.ply_index % 2; // 0 = X, 1 = O
+            let turn = self.ply_index % 2; // 0 = X, 1 = O
             let other = 1 - turn;
-            let last = self.game.last_move.expect("at least one move played");
+            let last = self.last_move.expect("at least one move played");
 
             // send opponent's last square → get this engine's reply
             let cell = self.engines[turn].send_opponent_move(last)?;
@@ -193,13 +197,17 @@ impl Battle {
     fn apply(&mut self, cell: u8, turn: usize) -> Result<Result<(), ()>> {
         println!(
             "Turn {} — {} ('{}') plays {cell}",
-            self.game.ply_index + 1,
+            self.ply_index + 1,
             if turn == 0 { "X" } else { "O" },
             self.engines[turn].name,
         );
 
         match self.game.validate_move(cell) {
-            Ok(_) => self.game.make(cell),
+            Ok(_) => {
+                self.game.make(cell);
+                self.last_move = Some(cell);
+                self.ply_index += 1;
+            }
             Err(e) => {
                 println!(
                     "Illegal move by '{}': {e} — forfeit.",
@@ -215,12 +223,12 @@ impl Battle {
         if self.game.check_win() {
             println!(
                 "Game over — '{}' wins after {} moves.",
-                self.engines[turn].name, self.game.ply_index,
+                self.engines[turn].name, self.ply_index,
             );
             return Ok(Err(()));
         }
         if self.game.check_draw() {
-            println!("Game over — draw after {} moves.", self.game.ply_index);
+            println!("Game over — draw after {} moves.", self.ply_index);
             return Ok(Err(()));
         }
 
