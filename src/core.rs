@@ -34,13 +34,14 @@ pub struct TicTacToe {
     // The first 47 (128 - 91) bits will never be used on these bitboards
     pub bitboard: u128,
     pub side_bitboard: u128,
-    pub all_clear: u16,  // 0 if not cleared, else 1
-    pub side_clear: u16, // 1s for each sub board cleared by white and black alternatively
-    pub turn: Symbol,
-    pub current_focus: Option<u8>, // the forced board to play on, None if impossible giving a free board focus
-
     /// Used to index the state_stack, representing the current ply, equivalent to a half-move.
     pub zobrist_key: u128,
+
+    pub all_clear: u16,  // 0 if not cleared, else 1
+    pub side_clear: u16, // 1s for each sub board cleared by white and black alternatively
+
+    pub current_focus: Option<u8>, // the forced board to play on, None if impossible giving a free board focus
+    pub turn: Symbol,
 }
 
 impl TicTacToe {
