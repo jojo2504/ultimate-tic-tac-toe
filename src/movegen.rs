@@ -1,6 +1,9 @@
 use rand::random_range;
 
-use crate::core::{CELL_TO_SUBBOARD_INDEX, MAP, TicTacToe, WINDOW};
+use crate::{
+    constants::{CELL_TO_SUBBOARD_INDEX, MAP, WINDOW},
+    core::TicTacToe,
+};
 
 pub fn generate_random_legal_move(game: &TicTacToe) -> u8 {
     let moves: u128 = generate_moves(&game);

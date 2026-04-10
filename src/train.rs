@@ -2,11 +2,11 @@ use std::io::{BufWriter, Write};
 
 use bincode::{Encode, config};
 
-use crate::{core::TicTacToe, game::random_game};
+use crate::{constants::FEATURES_COUNT, core::TicTacToe, game::random_game};
 
 #[derive(Encode)]
 pub struct Sample {
-    pub features: [f32; 200],
+    pub features: [f32; FEATURES_COUNT],
     pub outcome: f32,
 }
 

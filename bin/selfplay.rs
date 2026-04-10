@@ -27,7 +27,7 @@ fn main() {
             }
             "go" => {
                 // X moves first — pick any legal square
-                let cell = first_legal(&game);
+                let cell = generate_random_legal_move(&game);
                 game.make(cell);
                 writeln!(out, "{cell}").unwrap();
             }
