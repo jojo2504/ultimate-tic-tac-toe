@@ -1,14 +1,14 @@
 use bytemuck::{Pod, Zeroable, checked::try_from_bytes};
 use std::fs;
 
-use crate::constants::FEATURES_COUNT;
+use crate::{constants::FEATURES_COUNT, core::TicTacToe};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct Network {
     w0: [[f32; FEATURES_COUNT]; 128],
     b0: [f32; 128],
-    w1: [[f32; 128]; 64],
+    w1: [[f32; 256]; 64], // dual perspective
     b1: [f32; 64],
     w2: [[f32; 64]; 1],
     b2: [f32; 1],
@@ -31,15 +31,20 @@ impl Network {
     }
 
     pub fn forward(&self, acc: AccumulatorPair) -> f32 {
-        // layer 1: [128+128=256 inputs] → 64
-        // note: your current w1 is [64×128] — needs to be [64×256] for dual perspective
-        // for now assuming single perspective (128 inputs):
+        // layer 1: concatenate stm + nstm → 256 inputs
         let mut h1 = [0f32; 64];
         for i in 0..64 {
             let mut sum = self.b1[i];
+
+            // first 128: stm accumulator
             for j in 0..128 {
                 sum += self.w1[i][j] * screlu(acc.stm.0[j]);
             }
+            // second 128: nstm accumulator
+            for j in 0..128 {
+                sum += self.w1[i][j + 128] * screlu(acc.nstm.0[j]);
+            }
+
             h1[i] = screlu(sum);
         }
 
@@ -91,6 +96,37 @@ pub struct AccumulatorPair {
 }
 
 impl AccumulatorPair {
+    pub fn new(net: &Network, board: &TicTacToe) -> Self {
+        // stm: features from current player's perspective (your existing to_features)
+        let stm_features = board.to_features();
+
+        // nstm: same but with turn flipped
+        let mut flipped = board.clone();
+        flipped.turn = flipped.turn.swap();
+        let nstm_features = flipped.to_features();
+
+        let mut stm_acc = net.b0;
+        let mut nstm_acc = net.b0;
+
+        for i in 0..FEATURES_COUNT {
+            if stm_features[i] != 0.0 {
+                for j in 0..128 {
+                    stm_acc[j] += net.w0[j][i];
+                }
+            }
+            if nstm_features[i] != 0.0 {
+                for j in 0..128 {
+                    nstm_acc[j] += net.w0[j][i];
+                }
+            }
+        }
+
+        AccumulatorPair {
+            stm: Accumulator(stm_acc),
+            nstm: Accumulator(nstm_acc),
+        }
+    }
+
     pub fn swap_perspective(&mut self) {
         std::mem::swap(&mut self.stm, &mut self.nstm);
     }

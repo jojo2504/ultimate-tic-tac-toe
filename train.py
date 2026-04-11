@@ -32,14 +32,18 @@ X, y = load_samples("./databin/gen0_data.bin")
 print(f"X shape: {X.shape}, y shape: {y.shape}")
 
 # tiny network
+FEATURES = 199
+HL = 128
+
 model = nn.Sequential(
-    nn.Linear(200, 128),
-    nn.ReLU(),
-    nn.Linear(128, 64),
-    nn.ReLU(),
+    nn.Linear(FEATURES * 2, HL),  # 398 → 128  (was 199 → 128)
+    nn.SCReLU(),
+    nn.Linear(HL * 2, 64),  # 256 → 64   (was 128 → 64)
+    nn.SCReLU(),
     nn.Linear(64, 1),
     nn.Sigmoid(),
 )
+
 total_params = sum(p.numel() for p in model.parameters())
 print(f"model parameters: {total_params}")
 
