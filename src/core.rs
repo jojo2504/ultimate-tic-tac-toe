@@ -29,12 +29,18 @@ impl From<Symbol> for i32 {
     }
 }
 
+#[derive(Debug)]
+pub enum Result {
+    Win,
+    Loss,
+    Draw,
+}
+
 #[derive(Default, Clone, Copy)]
 pub struct TicTacToe {
     // The first 47 (128 - 91) bits will never be used on these bitboards
     pub bitboard: u128,
     pub side_bitboard: u128,
-    /// Used to index the state_stack, representing the current ply, equivalent to a half-move.
     pub zobrist_key: u128,
 
     pub all_clear: u16,  // 0 if not cleared, else 1
@@ -110,6 +116,20 @@ impl TicTacToe {
     #[inline(always)]
     pub fn check_draw(&self) -> bool {
         !self.check_win() && self.is_full()
+    }
+
+    pub fn is_game_over(&self) -> bool {
+        self.check_win() || self.check_draw()
+    }
+
+    // give the result from the current player perspective
+    pub fn result(&self) -> Result {
+        if self.check_win() {
+            return Result::Win;
+        } else if self.check_draw() {
+            return Result::Draw;
+        }
+        return Result::Loss;
     }
 
     #[inline(always)]

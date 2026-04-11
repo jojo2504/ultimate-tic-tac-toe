@@ -29,7 +29,7 @@ impl Network {
         1.0 / (1.0 + (-sum).exp())
     }
 
-    pub fn predict() {
+    pub fn predict(&self) -> f32 {
         todo!()
     }
 }

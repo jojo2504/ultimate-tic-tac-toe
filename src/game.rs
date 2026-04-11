@@ -1,4 +1,7 @@
-use crate::{core::TicTacToe, movegen::generate_random_legal_move, train::Sample};
+use crate::{
+    core::TicTacToe, movegen::generate_random_legal_move, network::Network, search::Search,
+    train::Sample,
+};
 
 pub fn start_random_game() {
     let mut game = TicTacToe::new();
@@ -45,4 +48,16 @@ pub fn random_game(game: &mut TicTacToe) -> Vec<Sample> {
         };
     }
     samples
+}
+
+pub fn start_self_game_with_net(path: &str) {
+    let net = Box::new(Network::load(path.to_owned()));
+    let mut game = TicTacToe::new();
+    let mut search = Search::new();
+
+    while !game.check_win() && !game.is_full() {
+        let move_square = search.think(&mut game, 5, &net);
+        game.make(move_square);
+        println!("{}", game);
+    }
 }

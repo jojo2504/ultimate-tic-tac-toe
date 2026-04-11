@@ -23,3 +23,7 @@ path = "bin/selfplay.rs"
 [[bin]]
 name = "battle"
 path = "bin/battle.rs"
+
+[[bin]]
+name = "main"
+path = "bin/main.rs"
