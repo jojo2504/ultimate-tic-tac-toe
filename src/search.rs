@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use crate::{
     core::{Result, TicTacToe},
     movegen::generate_moves,
-    network::Network,
+    network::{AccumulatorPair, Network},
 };
 
 #[derive(Default, Clone)]
@@ -41,6 +41,7 @@ pub struct Search {
     pub tt: HashMap<u128, TTEntry>, // zobrist_key, TTEntry
     ply: usize,
     positions: [TicTacToe; 81],
+    acc: [AccumulatorPair; 81],
 }
 
 impl Search {
@@ -49,6 +50,7 @@ impl Search {
             tt: HashMap::default(),
             ply: 0,
             positions: [TicTacToe::default(); 81],
+            acc: [AccumulatorPair::default(); 81],
         }
     }
 
@@ -93,7 +95,7 @@ impl Search {
         }
 
         if depth == 0 {
-            return net.predict(); // [0.0, 1.0] from current player's perspective
+            return net.forward(self.acc[self.ply]); // [0.0, 1.0] from current player's perspective
         }
 
         let mut best_score = f32::NEG_INFINITY;
