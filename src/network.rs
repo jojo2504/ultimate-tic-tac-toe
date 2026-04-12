@@ -24,8 +24,10 @@ fn sigmoid(x: f32) -> f32 {
 impl Network {
     pub fn load(path: String) -> Box<Self> {
         let bytes = fs::read(path).expect("failed to read weights file");
-        let network =
-            Box::new(*try_from_bytes::<Network>(&bytes).expect("invalid alignment or size"));
+        let network = Box::new(*try_from_bytes::<Network>(&bytes).expect(&format!(
+            "invalid alignment or size:\nsize of bytes: {}\n",
+            std::mem::size_of_val(&bytes)
+        )));
 
         network
     }

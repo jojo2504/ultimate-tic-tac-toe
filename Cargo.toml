@@ -27,3 +27,7 @@ path = "bin/battle.rs"
 [[bin]]
 name = "main"
 path = "bin/main.rs"
+
+[[bin]]
+name = "training_loop"
+path = "bin/training_loop.rs"

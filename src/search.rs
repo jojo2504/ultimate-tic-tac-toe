@@ -1,10 +1,4 @@
-use std::{
-    cmp::max,
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
-
-use rayon::prelude::*;
+use std::collections::HashMap;
 
 use crate::{
     core::{Result, TicTacToe},
@@ -36,10 +30,8 @@ impl TTEntry {
     }
 }
 
-#[derive(Clone)]
 pub struct Search {
     pub tt: HashMap<u128, TTEntry>, // zobrist_key, TTEntry
-    ply: usize,
     positions: [TicTacToe; 81],
     acc: [AccumulatorPair; 81],
 }
@@ -48,7 +40,6 @@ impl Search {
     pub fn new() -> Self {
         Self {
             tt: HashMap::default(),
-            ply: 0,
             positions: [TicTacToe::default(); 81],
             acc: [AccumulatorPair::default(); 81],
         }
@@ -56,7 +47,7 @@ impl Search {
 
     fn negamax(
         &mut self,
-        board: &mut TicTacToe,
+        board: &TicTacToe,
         depth: i32,
         mut alpha: f32,
         beta: f32,
@@ -95,23 +86,20 @@ impl Search {
         }
 
         if depth == 0 {
-            return net.forward(self.acc[self.ply]); // [0.0, 1.0] from current player's perspective
+            return net.forward(self.acc[board.ply]); // [0.0, 1.0] from current player's perspective
         }
 
         let mut best_score = f32::NEG_INFINITY;
         let mut moves = generate_moves(board);
 
         while moves != 0 {
-            let mv = 1 << moves.trailing_zeros();
+            let mv: u8 = moves.trailing_zeros() as u8;
             moves &= moves - 1;
 
-            self.positions[self.ply + 1] = self.positions[self.ply].clone();
-            self.ply += 1;
-            board.make(mv);
-            // negamax: flip score with (1.0 - score) instead of negating
-            // because our scores are in [0.0, 1.0], not [-inf, +inf]
-            let score = 1.0 - self.negamax(board, depth - 1, 1.0 - beta, 1.0 - alpha, net);
-            self.ply -= 1;
+            let mut child = board.clone();
+            child.make(mv.trailing_zeros() as u8);
+
+            let score = 1.0 - self.negamax(&child, depth - 1, 1.0 - beta, 1.0 - alpha, net);
 
             if score > best_score {
                 best_score = score;
@@ -120,7 +108,7 @@ impl Search {
                 alpha = score;
             }
             if alpha >= beta {
-                break; // cutoff
+                break;
             }
         }
 
@@ -145,20 +133,23 @@ impl Search {
         best_score
     }
 
-    pub fn think(&mut self, board: &mut TicTacToe, depth: i32, net: &Network) -> u8 {
+    pub fn think(&mut self, board: &TicTacToe, depth: i32, net: &Network) -> u8 {
+        // sync the positions with the ply given by the board passed in parameters
+        // and clone the board at his right position in the stack
+        self.positions[board.ply] = board.clone();
+
         let mut moves = generate_moves(board);
-        let mut best_mv = 1 << moves.trailing_zeros();
+        let mut best_mv = moves.trailing_zeros() as u8;
         let mut best_score = f32::NEG_INFINITY;
 
         while moves != 0 {
-            let mv = 1 << moves.trailing_zeros();
+            let mv: u8 = moves.trailing_zeros() as u8;
             moves &= moves - 1;
 
-            self.positions[self.ply + 1] = self.positions[self.ply].clone();
-            self.ply += 1;
-            board.make(mv);
-            let score = 1.0 - self.negamax(board, depth - 1, 0.0, 1.0, net);
-            self.ply -= 1;
+            let mut child = board.clone();
+            child.make(mv.trailing_zeros() as u8);
+
+            let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net);
 
             if score > best_score {
                 best_score = score;
@@ -166,6 +157,6 @@ impl Search {
             }
         }
 
-        best_mv
+        best_mv as u8
     }
 }

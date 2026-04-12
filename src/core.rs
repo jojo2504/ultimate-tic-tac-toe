@@ -48,6 +48,7 @@ pub struct TicTacToe {
 
     pub current_focus: Option<u8>, // the forced board to play on, None if impossible giving a free board focus
     pub turn: Symbol,
+    pub ply: usize,
 }
 
 impl TicTacToe {
@@ -81,6 +82,7 @@ impl TicTacToe {
             ((1u16 << CELL_TO_SUBBOARD_FOCUS[square as usize]) & self.all_clear as u16 == 0)
                 .then_some(CELL_TO_SUBBOARD_FOCUS[square as usize]);
         self.turn = self.turn.swap();
+        self.ply += 1;
     }
 
     /// Used as a helper during a make move\
