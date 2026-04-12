@@ -86,7 +86,8 @@ impl Search {
         }
 
         if depth == 0 {
-            return net.forward(self.acc[board.ply]); // [0.0, 1.0] from current player's perspective
+            let acc = AccumulatorPair::new(net, board);
+            return net.forward(acc); // [0.0, 1.0] from current player's perspective
         }
 
         let mut best_score = f32::NEG_INFINITY;
@@ -97,7 +98,7 @@ impl Search {
             moves &= moves - 1;
 
             let mut child = board.clone();
-            child.make(mv.trailing_zeros() as u8);
+            child.make(mv);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 1.0 - beta, 1.0 - alpha, net);
 
@@ -147,10 +148,10 @@ impl Search {
             moves &= moves - 1;
 
             let mut child = board.clone();
-            child.make(mv.trailing_zeros() as u8);
+            child.make(mv);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net);
-
+            // println!("score {}", score);
             if score > best_score {
                 best_score = score;
                 best_mv = mv;
