@@ -160,4 +160,70 @@ impl Search {
 
         best_mv as u8
     }
+
+    pub fn think_training(&mut self, board: &TicTacToe, depth: i32, net: &Network) -> u8 {
+        let temperature = if board.ply < 10 {
+            1.0 // opening: explore freely
+        } else if board.ply < 25 {
+            0.5 // midgame: some noise
+        } else {
+            0.0 // endgame: play best move
+        };
+
+        self.think_with_noise(board, depth, net, temperature)
+    }
+
+    fn think_with_noise(
+        &mut self,
+        board: &TicTacToe,
+        depth: i32,
+        net: &Network,
+        temperature: f32, // 0.0 = deterministic, 1.0 = proportional, >1.0 = more random
+    ) -> u8 {
+        let mut moves = generate_moves(board);
+        let mut move_scores: Vec<(u8, f32)> = Vec::new();
+
+        while moves != 0 {
+            let mv = moves.trailing_zeros() as u8;
+            moves &= moves - 1;
+
+            let mut child = board.clone();
+            child.make(mv);
+
+            let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net);
+            move_scores.push((mv, score));
+        }
+
+        if temperature == 0.0 {
+            // deterministic — best move
+            return move_scores
+                .iter()
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                .unwrap()
+                .0;
+        }
+
+        // softmax sampling
+        let max_score = move_scores
+            .iter()
+            .map(|(_, s)| s)
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max);
+        let weights: Vec<f32> = move_scores
+            .iter()
+            .map(|(_, s)| ((s - max_score) / temperature).exp())
+            .collect();
+
+        let total: f32 = weights.iter().sum();
+        let mut rng_val = rand::random::<f32>() * total;
+
+        for (i, w) in weights.iter().enumerate() {
+            rng_val -= w;
+            if rng_val <= 0.0 {
+                return move_scores[i].0;
+            }
+        }
+
+        move_scores.last().unwrap().0
+    }
 }

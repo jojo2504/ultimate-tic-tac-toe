@@ -87,7 +87,7 @@ pub fn start_self_game_with_net(path: &str) -> Vec<Sample> {
             outcome: 0.0,
         }); // outcome filled later
 
-        let move_square = search.think(&mut game, 5, &net);
+        let move_square = search.think_training(&mut game, 4, &net);
         game.make(move_square);
         println!("{}", game);
     }
