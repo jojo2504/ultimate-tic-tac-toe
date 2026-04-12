@@ -65,8 +65,7 @@ pub fn random_game() -> Vec<Sample> {
     samples
 }
 
-pub fn start_self_game_with_net(path: &str) -> Vec<Sample> {
-    let net = Network::load(path.to_owned());
+pub fn start_self_game_with_net(net: &Network) -> Vec<Sample> {
     let mut game = TicTacToe::new();
     let mut search = Search::new();
 

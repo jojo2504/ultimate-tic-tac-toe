@@ -12,6 +12,9 @@ once_cell = "1.21.4"
 rand = "0.10.0"
 rayon = "1.11.0"
 
+[profile.release]
+debug = true        # keep symbols in release build
+
 [[bin]]
 name = "gendatabin"
 path = "bin/gendatabin.rs"

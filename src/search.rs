@@ -181,7 +181,8 @@ impl Search {
         temperature: f32, // 0.0 = deterministic, 1.0 = proportional, >1.0 = more random
     ) -> u8 {
         let mut moves = generate_moves(board);
-        let mut move_scores: Vec<(u8, f32)> = Vec::new();
+        let mut move_scores = [(0u8, 0f32); 81];
+        let mut count = 0;
 
         while moves != 0 {
             let mv = moves.trailing_zeros() as u8;
@@ -191,12 +192,13 @@ impl Search {
             child.make(mv);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net);
-            move_scores.push((mv, score));
+            move_scores[count] = (mv, score);
+            count += 1;
         }
 
         if temperature == 0.0 {
             // deterministic — best move
-            return move_scores
+            return move_scores[..count]
                 .iter()
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
                 .unwrap()
@@ -204,12 +206,12 @@ impl Search {
         }
 
         // softmax sampling
-        let max_score = move_scores
+        let max_score = move_scores[..count]
             .iter()
             .map(|(_, s)| s)
             .cloned()
             .fold(f32::NEG_INFINITY, f32::max);
-        let weights: Vec<f32> = move_scores
+        let weights: Vec<f32> = move_scores[..count]
             .iter()
             .map(|(_, s)| ((s - max_score) / temperature).exp())
             .collect();
@@ -224,6 +226,6 @@ impl Search {
             }
         }
 
-        move_scores.last().unwrap().0
+        move_scores[..count].last().unwrap().0
     }
 }

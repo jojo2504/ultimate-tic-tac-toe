@@ -8,6 +8,7 @@ use crate::{
     game::{random_game, start_self_game_with_net},
     movegen::generate_moves,
     network::Network,
+    search::Search,
 };
 
 #[derive(Encode)]
@@ -37,11 +38,10 @@ pub fn generate_first_databin(gen_count: i32) -> anyhow::Result<()> {
 
 pub fn generate_iterative_databin(gen_count: i32) -> anyhow::Result<()> {
     let mut all_samples: Vec<Sample> = vec![];
+    let net = Network::load(format!("databin/gen{}_weights.bin", gen_count - 1));
+    // let mut search = Search::new();
     for _ in 0..10_000 {
-        all_samples.extend(start_self_game_with_net(&format!(
-            "databin/gen{}_weights.bin",
-            gen_count - 1
-        )));
+        all_samples.extend(start_self_game_with_net(&net));
     }
 
     let file = std::fs::File::create(format!("databin/gen{}_data.bin", gen_count))?;
