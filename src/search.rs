@@ -174,7 +174,7 @@ impl Search {
         self.think_with_noise(board, depth, net, temperature)
     }
 
-    fn think_with_noise(
+    pub fn think_with_noise(
         &mut self,
         board: &TicTacToe,
         depth: i32,

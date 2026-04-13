@@ -11,7 +11,7 @@ FEATURES = 398
 LABEL = 1
 ROW_SIZE = FEATURES + LABEL
 BATCH_SIZE = 16384  # Large batches are better for GPU utilization
-EPOCHS = 100
+EPOCHS = 20
 LEARNING_RATE = 0.001
 
 # Detect Device: AMD ROCm (Linux) or MPS (Mac) or DirectML/CPU

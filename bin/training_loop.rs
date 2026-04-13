@@ -22,7 +22,8 @@ pub fn tournament(base_net_path: &str, challenger_net_path: &str, num_games: u32
         .into_par_iter()
         .map(|game_index| {
             let mut game = TicTacToe::new();
-            let mut search = Search::new(); // fresh TT per game
+            let mut challenger_search = Search::new();
+            let mut base_search = Search::new();
 
             // alternate colors — challenger is Cross (first) on even games
             let challenger_is_cross = game_index % 2 == 0;
@@ -33,9 +34,9 @@ pub fn tournament(base_net_path: &str, challenger_net_path: &str, num_games: u32
                 let challenger_to_move = cross_to_move == challenger_is_cross;
 
                 let mv = if challenger_to_move {
-                    search.think(&game, 4, &challenger_net)
+                    challenger_search.think_training(&game, 4, &challenger_net)
                 } else {
-                    search.think(&game, 4, &base_net)
+                    base_search.think_training(&game, 4, &base_net)
                 };
 
                 game.make(mv);
@@ -43,17 +44,17 @@ pub fn tournament(base_net_path: &str, challenger_net_path: &str, num_games: u32
 
             match game.result() {
                 Result::Draw => {
-                    println!("game {}/{}: Draw", game_index + 1, num_games);
+                    // println!("game {}/{}: Draw", game_index + 1, num_games);
                     (0, 1, 0)
                 }
                 Result::Win => {
                     // winner = player who just moved = was on ply (game.ply - 1)
                     let winner_was_cross = (game.ply - 1) % 2 == 0;
                     if winner_was_cross == challenger_is_cross {
-                        println!("game {}/{}: Challenger wins", game_index + 1, num_games);
+                        // println!("game {}/{}: Challenger wins", game_index + 1, num_games);
                         (1, 0, 0)
                     } else {
-                        println!("game {}/{}: Baseline wins", game_index + 1, num_games);
+                        // println!("game {}/{}: Baseline wins", game_index + 1, num_games);
                         (0, 0, 1)
                     }
                 }
@@ -93,7 +94,7 @@ fn elo_diff(wins: u32, draws: u32, losses: u32) -> f32 {
 }
 
 fn main() -> anyhow::Result<()> {
-    let mut gen_count = 1;
+    let mut gen_count = 12;
     let mut best_net = format!("databin/gen{}_weights.bin", gen_count - 1);
 
     loop {
