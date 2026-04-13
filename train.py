@@ -4,104 +4,140 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
 
-FEATURES = 398  # dual perspective: 199 * 2
+# --- Configuration ---
+FEATURES = 398
 LABEL = 1
-ROW_SIZE = FEATURES + LABEL  # 399
+ROW_SIZE = FEATURES + LABEL
+BATCH_SIZE = 16384  # Large batches are better for GPU utilization
+EPOCHS = 100
+LEARNING_RATE = 0.001
+
+# Detect Device: AMD ROCm (Linux) or MPS (Mac) or DirectML/CPU
+if torch.cuda.is_available():
+    device = torch.device("cuda")  # ROCm maps to "cuda" in PyTorch
+    print(f"Using AMD GPU (via ROCm)")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+    print("Using Apple Silicon GPU")
+else:
+    device = torch.device("cpu")
+    print("Using CPU (AMD GPU not detected. Install ROCm PyTorch!)")
 
 
-def load_samples(path):
-    print(f"loading {path}...")
-    start = time.time()
-    with open(path, "rb") as f:
-        raw = f.read()
-    print(f"read {len(raw) / 1e6:.1f} MB in {time.time() - start:.2f}s")
+# --- Faster Data Loading with Memory Mapping ---
+def load_data_fast(path):
+    print(f"Mapping {path}...")
+    # np.memmap avoids loading the whole file into RAM at once
+    data = np.memmap(path, dtype=np.float32, mode="r")
 
+    # Try to find alignment
     for skip in [0, 4, 8, 16]:
-        remaining = len(raw) - skip
-        if remaining % (ROW_SIZE * 4) == 0:
-            print(f"aligned at skip={skip}")
-            data = np.frombuffer(raw[skip:], dtype=np.float32)
-            n = len(data) // ROW_SIZE
-            data = data.reshape(n, ROW_SIZE)
-            X = torch.tensor(data[:, :FEATURES])  # 398 features
-            y = torch.tensor(data[:, FEATURES:])  # 1 label
-            print(f"loaded {n} samples ({n * ROW_SIZE * 4 / 1e6:.1f} MB)")
+        n_elements = len(data) - skip
+        if n_elements % ROW_SIZE == 0:
+            n_samples = n_elements // ROW_SIZE
+            # Reshape without copying memory
+            data = data[skip:].reshape(n_samples, ROW_SIZE)
+            X = torch.from_numpy(data[:, :FEATURES])
+            y = torch.from_numpy(data[:, FEATURES:])
+            print(f"Successfully aligned: {n_samples} samples found.")
             return X, y
-
-    raise ValueError(f"could not align buffer, size={len(raw)}")
-
-
-# load data
-X, y = load_samples("./databin/gen0_data.bin")
-print(f"X shape: {X.shape}, y shape: {y.shape}")
+    raise ValueError("Could not align binary data.")
 
 
+# --- Architecture ---
 class SCReLU(nn.Module):
     def forward(self, x):
-        return torch.clamp(x, 0.0, 1.0) ** 2
+        # Optimized SCReLU: clamp and square
+        return torch.clamp(x, 0.0, 1.0).pow(2)
 
 
 class DualPerspectiveNNUE(nn.Module):
     def __init__(self, features=199, hl=128):
         super().__init__()
         self.features = features
-        self.hl = hl
-
-        # Accumulator: shared weights for both perspectives
+        # Shared accumulator for both perspectives
         self.fc0 = nn.Linear(features, hl)
-
-        # Layer 1: Takes concatenated STM and NSTM hidden layers
         self.fc1 = nn.Linear(hl * 2, 64)
-
-        # Output layer
         self.fc2 = nn.Linear(64, 1)
-
         self.screlu = SCReLU()
 
     def forward(self, x):
+        # Split features into Side-To-Move and Non-Side-To-Move
         stm = x[:, : self.features]
         nstm = x[:, self.features :]
 
-        acc_stm = self.fc0(stm)
-        acc_nstm = self.fc0(nstm)
+        # Perspective Pooling
+        acc_stm = self.screlu(self.fc0(stm))
+        acc_nstm = self.screlu(self.fc0(nstm))
 
-        l1_in = torch.cat([self.screlu(acc_stm), self.screlu(acc_nstm)], dim=1)
+        # Concatenate and pass through hidden layer
+        l1_in = torch.cat([acc_stm, acc_nstm], dim=1)
+        l1_out = self.screlu(self.fc1(l1_in))
 
-        l1_out = self.fc1(l1_in)
-        l1_out = self.screlu(l1_out)
-
-        out = self.fc2(l1_out)
-        return torch.sigmoid(out)
+        return torch.sigmoid(self.fc2(l1_out))
 
 
-model = DualPerspectiveNNUE(features=199, hl=128)
+# --- Main Execution ---
+if __name__ == "__main__":
+    X_raw, y_raw = load_data_fast(f"./databin/gen{sys.argv[1]}_data.bin")
 
-total_params = sum(p.numel() for p in model.parameters())
-print(f"model parameters: {total_params}")
+    dataset = TensorDataset(X_raw, y_raw)
+    # pin_memory=True speeds up CPU -> GPU transfer
+    loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True)
 
-optimizer = torch.optim.Adam(model.parameters())
-loss_fn = nn.MSELoss()
+    model = DualPerspectiveNNUE().to(device)
 
-print("training...")
-start = time.time()
-for epoch in range(100):
-    pred = model(X)
-    loss = loss_fn(pred, y)
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+    # Optional: PyTorch 2.0+ Compilation (Linux only, adds 1-2 min startup but 30% faster training)
+    if sys.platform == "linux" and hasattr(torch, "compile"):
+        try:
+            model = torch.compile(model)
+            print("Model compiled for optimized kernels.")
+        except:
+            print("Compilation failed, falling back to standard mode.")
 
-    if epoch % 10 == 0:
-        elapsed = time.time() - start
-        print(f"epoch {epoch:3d}/100 | loss {loss.item():.6f} | {elapsed:.1f}s elapsed")
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    loss_fn = nn.MSELoss()
 
-print(f"training done in {time.time() - start:.1f}s")
+    # Use Automatic Mixed Precision (AMP) for a massive speed boost on RDNA/CDNA cards
+    scaler = torch.cuda.amp.GradScaler()
 
-# export
-weights = [p.detach().numpy().flatten() for p in model.parameters()]
-all_weights = np.concatenate(weights).astype(np.float32)
-all_weights.tofile(f"databin/gen{sys.argv[1]}_weights.bin")
-print(
-    f"saved gen{sys.argv[1]}_weights.bin ({len(all_weights)} floats, {len(all_weights) * 4} bytes)"
-)
+    print("Starting training...")
+    start_time = time.time()
+
+    for epoch in range(EPOCHS):
+        epoch_loss = 0.0
+        for batch_X, batch_y in loader:
+            batch_X, batch_y = (
+                batch_X.to(device, non_blocking=True),
+                batch_y.to(device, non_blocking=True),
+            )
+
+            # Mixed precision context
+            with torch.cuda.amp.autocast():
+                pred = model(batch_X)
+                loss = loss_fn(pred, batch_y)
+
+            optimizer.zero_grad(set_to_none=True)  # Faster than zero_grad()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
+            epoch_loss += loss.item()
+
+        if epoch % 10 == 0:
+            avg_loss = epoch_loss / len(loader)
+            print(
+                f"Epoch {epoch:3d} | Loss: {avg_loss:.6f} | Time: {time.time() - start_time:.1f}s"
+            )
+
+    print(f"Total training time: {time.time() - start_time:.2f}s")
+
+    # Export
+    model.to("cpu")  # Move back to export weights
+    weights = [p.detach().numpy().flatten() for p in model.parameters()]
+    all_weights = np.concatenate(weights).astype(np.float32)
+    save_path = f"databin/gen{sys.argv[1] if len(sys.argv) > 1 else 0}_weights.bin"
+    all_weights.tofile(save_path)
+    print(f"Saved weights to {save_path}")

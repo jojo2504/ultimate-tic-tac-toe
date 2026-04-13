@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use std::io::{BufWriter, Write};
 
 use bincode::Encode;
@@ -40,8 +41,17 @@ pub fn generate_iterative_databin(gen_count: i32) -> anyhow::Result<()> {
     let mut all_samples: Vec<Sample> = vec![];
     let net = Network::load(format!("databin/gen{}_weights.bin", gen_count - 1));
     // let mut search = Search::new();
-    for _ in 0..10_000 {
-        all_samples.extend(start_self_game_with_net(&net));
+    let games_samples: Vec<Vec<Sample>> = (0..300)
+        .into_par_iter()
+        .map(|i| {
+            let samples = start_self_game_with_net(&net);
+            println!("game {} completed.", i);
+            samples
+        })
+        .collect();
+
+    for samples in games_samples {
+        all_samples.extend(samples);
     }
 
     let file = std::fs::File::create(format!("databin/gen{}_data.bin", gen_count))?;

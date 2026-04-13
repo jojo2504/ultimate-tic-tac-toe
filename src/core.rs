@@ -140,24 +140,38 @@ impl TicTacToe {
         (self.full_subboard | self.all_clear) == 0b111111111
     }
 
+    /// Returns features from the side-to-move's perspective.
     pub fn to_features(&self) -> [f32; FEATURES_COUNT] {
+        self.to_features_for_perspective(false)
+    }
+
+    /// Returns features for a given perspective.
+    /// `as_opponent = false` → side-to-move's perspective (STM)
+    /// `as_opponent = true`  → opponent's perspective (NSTM)
+    ///
+    /// XOR-toggle invariant: `side_bitboard` always holds the opponent's
+    /// pieces, `side_bitboard ^ bitboard` always holds the current
+    /// player's pieces — regardless of which side is to move.
+    pub fn to_features_for_perspective(&self, as_opponent: bool) -> [f32; FEATURES_COUNT] {
         let mut features = [0.0f32; FEATURES_COUNT];
 
-        // Determine which bitboard belongs to whom based on ply parity
-        let (current_bb, opponent_bb, current_clear, opponent_clear) = match self.turn as i32 {
-            1 => (
-                self.side_bitboard,
-                self.side_bitboard ^ self.bitboard,
-                self.side_clear,
-                self.side_clear ^ (self.all_clear as u16),
-            ),
-            -1 => (
+        // Determine which bitboard belongs to whom
+        // sbb = opponent's pieces, sbb^bb = current's pieces (always)
+        let (current_bb, opponent_bb, current_clear, opponent_clear) = if !as_opponent {
+            (
                 self.side_bitboard ^ self.bitboard,
                 self.side_bitboard,
                 self.side_clear ^ (self.all_clear as u16),
                 self.side_clear,
-            ),
-            _ => unreachable!(),
+            )
+        } else {
+            // Swap perspective: opponent becomes "current"
+            (
+                self.side_bitboard,
+                self.side_bitboard ^ self.bitboard,
+                self.side_clear,
+                self.side_clear ^ (self.all_clear as u16),
+            )
         };
 
         // 81 bits — current player raw bitboard

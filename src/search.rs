@@ -77,17 +77,18 @@ impl Search {
 
         // terminal / leaf
         if board.is_game_over() {
-            // game over: return exact result from current player's perspective
+            // check_win() tests side_clear which holds the LAST MOVER's clears
+            // (opponent of current side-to-move). So Win = current player lost.
             return match board.result() {
-                Result::Win => 1.0,  // current player won
-                Result::Loss => 0.0, // current player lost
+                Result::Win => 0.0,  // opponent (last mover) won → we lost
+                Result::Loss => 1.0, // unreachable at terminal, but consistent
                 Result::Draw => 0.5,
             };
         }
 
         if depth == 0 {
             let acc = AccumulatorPair::new(net, board);
-            return net.forward(acc); // [0.0, 1.0] from current player's perspective
+            return net.forward(&acc); // [0.0, 1.0] from current player's perspective
         }
 
         let mut best_score = f32::NEG_INFINITY;

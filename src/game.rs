@@ -31,10 +31,7 @@ pub fn random_game() -> Vec<Sample> {
     while !game.check_win() && !game.is_full() {
         let mut features = [0.0; crate::constants::FEATURES_COUNT * 2];
         let stm_features = game.to_features();
-
-        let mut flipped = game.clone();
-        flipped.turn = flipped.turn.swap();
-        let nstm_features = flipped.to_features();
+        let nstm_features = game.to_features_for_perspective(true);
 
         features[..crate::constants::FEATURES_COUNT].copy_from_slice(&stm_features);
         features[crate::constants::FEATURES_COUNT..].copy_from_slice(&nstm_features);
@@ -56,7 +53,8 @@ pub fn random_game() -> Vec<Sample> {
     // alternate perspective per move
     let n = samples.len();
     for (i, s) in samples.iter_mut().enumerate() {
-        s.outcome = if (n - i) % 2 == 0 {
+        // Winner moved at ply n-1; winner's positions share parity with n-1
+        s.outcome = if (n - 1 - i) % 2 == 0 {
             outcome
         } else {
             1.0 - outcome
@@ -73,10 +71,7 @@ pub fn start_self_game_with_net(net: &Network) -> Vec<Sample> {
     while !game.check_win() && !game.is_full() {
         let mut features = [0.0; crate::constants::FEATURES_COUNT * 2];
         let stm_features = game.to_features();
-
-        let mut flipped = game.clone();
-        flipped.turn = flipped.turn.swap();
-        let nstm_features = flipped.to_features();
+        let nstm_features = game.to_features_for_perspective(true);
 
         features[..crate::constants::FEATURES_COUNT].copy_from_slice(&stm_features);
         features[crate::constants::FEATURES_COUNT..].copy_from_slice(&nstm_features);
@@ -88,13 +83,13 @@ pub fn start_self_game_with_net(net: &Network) -> Vec<Sample> {
 
         let move_square = search.think_training(&mut game, 4, &net);
         game.make(move_square);
-        println!("{}{}", game, move_square);
-        println!(
-            "{:?}, {:09b}, {:09b}",
-            game.turn.swap(),
-            game.side_clear,
-            game.all_clear
-        );
+        // println!("{}{}", game, move_square);
+        // println!(
+        //     "{:?}, {:09b}, {:09b}",
+        //     game.turn.swap(),
+        //     game.side_clear,
+        //     game.all_clear
+        // );
     }
 
     let outcome = match game.check_win() {
@@ -102,17 +97,12 @@ pub fn start_self_game_with_net(net: &Network) -> Vec<Sample> {
         false => 0.5, // draw
     };
 
-    println!(
-        "{:?} {}, {:09b}, {:09b}",
-        game.turn.swap(),
-        outcome,
-        game.side_clear,
-        game.all_clear
-    );
+    // println!("{:?} {}", game.turn.swap(), outcome);
 
     let n = samples.len();
     for (i, s) in samples.iter_mut().enumerate() {
-        s.outcome = if (n - i) % 2 == 0 {
+        // Winner moved at ply n-1; winner's positions share parity with n-1
+        s.outcome = if (n - 1 - i) % 2 == 0 {
             outcome
         } else {
             1.0 - outcome
