@@ -60,6 +60,8 @@ impl TicTacToe {
     pub fn validate_move(&self, square: u8) -> anyhow::Result<()> {
         if self.all_clear & (1 << CELL_TO_SUBBOARD_INDEX[square as usize]) == 0
             && (self.bitboard & (1 << square)) == 0
+            && (self.current_focus.is_none()
+                || CELL_TO_SUBBOARD_INDEX[square as usize] == self.current_focus.unwrap())
         {
             return Ok(());
         }
