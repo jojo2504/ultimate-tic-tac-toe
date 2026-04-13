@@ -1,0 +1,12 @@
+{
+  "semantic_tokens": "off",
+  "languages": {
+    "Rust": {
+      "document_symbols": "off",
+      "document_folding_ranges": "off",
+      "inlay_hints": {
+        "enabled": true
+      }
+    }
+  }
+}

@@ -24,7 +24,7 @@ pub fn generate_moves(board: &TicTacToe) -> u128 {
     let occupied = board.bitboard;
 
     let mask = if let Some(current_focus) = board.current_focus
-        && (board.all_clear & (1 << board.current_focus.unwrap())) == 0
+        && ((board.full_subboard | board.all_clear) & (1 << board.current_focus.unwrap())) == 0
     {
         WINDOW << MAP[current_focus as usize]
     } else {

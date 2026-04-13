@@ -43,8 +43,9 @@ pub struct TicTacToe {
     pub side_bitboard: u128,
     pub zobrist_key: u128,
 
-    pub all_clear: u16,  // 0 if not cleared, else 1
-    pub side_clear: u16, // 1s for each sub board cleared by white and black alternatively
+    pub all_clear: u16,     // 0 if not cleared, else 1
+    pub side_clear: u16,    // 1s for each sub board cleared by white and black alternatively
+    pub full_subboard: u16, // tracks the subboards which are full, need to separated all_clear and this else risk of corruption of side_clear
 
     pub current_focus: Option<u8>, // the forced board to play on, None if impossible giving a free board focus
     pub turn: Symbol,
@@ -100,7 +101,7 @@ impl TicTacToe {
 
         let mask = WINDOW << MAP[CELL_TO_SUBBOARD_INDEX[square as usize] as usize];
         if mask & self.bitboard == mask {
-            self.all_clear ^= 1 << CELL_TO_SUBBOARD_INDEX[square as usize];
+            self.full_subboard ^= 1 << CELL_TO_SUBBOARD_INDEX[square as usize];
         }
 
         None
@@ -136,7 +137,7 @@ impl TicTacToe {
 
     #[inline(always)]
     pub fn is_full(&self) -> bool {
-        self.all_clear == 0b111111111
+        (self.full_subboard | self.all_clear) == 0b111111111
     }
 
     pub fn to_features(&self) -> [f32; FEATURES_COUNT] {

@@ -88,13 +88,27 @@ pub fn start_self_game_with_net(net: &Network) -> Vec<Sample> {
 
         let move_square = search.think_training(&mut game, 4, &net);
         game.make(move_square);
-        println!("{}", game);
+        println!("{}{}", game, move_square);
+        println!(
+            "{:?}, {:09b}, {:09b}",
+            game.turn.swap(),
+            game.side_clear,
+            game.all_clear
+        );
     }
 
     let outcome = match game.check_win() {
         true => 1.0,  // last player to move won
         false => 0.5, // draw
     };
+
+    println!(
+        "{:?} {}, {:09b}, {:09b}",
+        game.turn.swap(),
+        outcome,
+        game.side_clear,
+        game.all_clear
+    );
 
     let n = samples.len();
     for (i, s) in samples.iter_mut().enumerate() {
