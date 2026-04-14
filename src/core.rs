@@ -175,8 +175,6 @@ impl TicTacToe {
     pub fn to_features(&self) -> [f32; FEATURES_COUNT] {
         let mut features = [0.0f32; FEATURES_COUNT];
 
-        // Determine which bitboard belongs to whom
-        // sbb = opponent's pieces, sbb^bb = current's pieces (always)
         let (cross_bb, circle_bb, cross_clear, circle_clear) = match self.turn as i32 {
             1 => (
                 self.side_bitboard ^ self.bitboard,

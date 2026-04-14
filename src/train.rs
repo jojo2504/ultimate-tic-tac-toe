@@ -98,14 +98,17 @@ pub fn tournament(base_net_path: &str, challenger_net_path: &str, num_games: u32
                 let cross_to_move = game.ply % 2 == 0;
                 let challenger_to_move = cross_to_move == challenger_is_cross;
 
-                let mv = if challenger_to_move {
-                    challenger_search.think_training(&game, 6, &challenger_net)
+                if challenger_to_move {
+                    let mv = challenger_search.think_training(&game, 6, &challenger_net);
+                    let delta = game.make(mv);
+                    challenger_search.acc[game.ply].apply_delta(&challenger_net, &delta);
                 } else {
-                    base_search.think_training(&game, 6, &base_net)
+                    let mv = base_search.think_training(&game, 6, &base_net);
+                    let delta = game.make(mv);
+                    base_search.acc[game.ply].apply_delta(&base_net, &delta);
                 };
 
-                game.make(mv);
-                println!("{}", game);
+                // println!("{}", game);
             }
 
             match game.result() {

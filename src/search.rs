@@ -33,7 +33,7 @@ impl TTEntry {
 pub struct Search {
     positions: [TicTacToe; 81],
     tt: HashMap<u64, TTEntry>,
-    acc: [Accumulator; 81],
+    pub acc: [Accumulator; 81],
 }
 
 impl Search {
@@ -151,7 +151,10 @@ impl Search {
             moves &= moves - 1;
 
             let mut child = board.clone();
-            child.make(mv);
+            let delta = child.make(mv); // Get delta
+
+            // Clone accumulator to pass down
+            self.acc[board.ply].apply_delta(net, &delta);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net);
             // println!("score {}", score);
