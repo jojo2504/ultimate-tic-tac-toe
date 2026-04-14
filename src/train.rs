@@ -45,9 +45,9 @@ pub fn generate_first_databin(gen_count: i32) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn generate_iterative_databin(gen_count: i32) -> anyhow::Result<()> {
+pub fn generate_iterative_databin(gen_count: i32, best_gen: i32) -> anyhow::Result<()> {
     let mut all_samples: Vec<Sample> = vec![];
-    let net = Network::load(format!("databin/gen{}_weights.bin", gen_count - 1));
+    let net = Network::load(format!("databin/gen{}_weights.bin", best_gen));
     // let mut search = Search::new();
     let counter = std::sync::atomic::AtomicUsize::new(0);
     let games_samples: Vec<Vec<Sample>> = (0..1000)

@@ -1,7 +1,9 @@
+import argparse
 import glob
 import os
 import sys
 import time
+from typing import Optional
 
 import numpy as np
 import torch
@@ -14,7 +16,7 @@ from torch.utils.data import ConcatDataset, DataLoader, TensorDataset
 FEATURES = 199
 LABEL = 1
 ROW_SIZE = FEATURES + LABEL  # 200
-EPOCHS = 15
+EPOCHS = 40
 BATCH_SIZE = 8192
 LEARNING_RATE = 0.001
 
@@ -150,11 +152,26 @@ class SinglePerspectiveNNUE(nn.Module):
         l1_out = self.screlu(self.fc1(l1_in))
         return torch.sigmoid(self.fc2(l1_out))
 
+    def load_weights(self, path: str):
+        print(f"Loading base weights from {path} ...")
+        with open(path, "rb") as f:
+            raw = f.read()
+        all_weights = np.frombuffer(raw, dtype=np.float32)
+
+        offset = 0
+        with torch.no_grad():
+            for p in self.parameters():
+                numel = p.numel()
+                w = all_weights[offset : offset + numel]
+                p.copy_(torch.from_numpy(w).view_as(p))
+                offset += numel
+        print(f"  Loaded {offset:,} floats.")
+
 
 # ─────────────────────────────────────────────
 # Training loop
 # ─────────────────────────────────────────────
-def train(gen_count: int):
+def train(gen_count: int, base_weights: Optional[str] = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
@@ -175,7 +192,10 @@ def train(gen_count: int):
         num_workers=0,
     )
 
-    model = SinglePerspectiveNNUE(features=FEATURES, hl=128).to(device)
+    model = SinglePerspectiveNNUE(features=FEATURES, hl=128)
+    if base_weights and os.path.exists(base_weights):
+        model.load_weights(base_weights)
+    model = model.to(device)
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {total_params:,}")
 
@@ -246,5 +266,11 @@ def train(gen_count: int):
 # Entry point
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
-    gen_count = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-    train(gen_count)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("gen_count", type=int, nargs="?", default=0)
+    parser.add_argument(
+        "--base-weights", type=str, default=None, help="Path to base weights to load"
+    )
+    args = parser.parse_args()
+
+    train(args.gen_count, base_weights=args.base_weights)
