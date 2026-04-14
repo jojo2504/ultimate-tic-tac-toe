@@ -162,7 +162,9 @@ class SinglePerspectiveNNUE(nn.Module):
         with torch.no_grad():
             for p in self.parameters():
                 numel = p.numel()
-                w = all_weights[offset : offset + numel]
+                w = all_weights[
+                    offset : offset + numel
+                ].copy()  # make writable to avoid PyTorch warning
                 p.copy_(torch.from_numpy(w).view_as(p))
                 offset += numel
         print(f"  Loaded {offset:,} floats.")

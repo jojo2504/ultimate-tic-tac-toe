@@ -99,11 +99,12 @@ impl Search {
             moves &= moves - 1;
 
             let mut child = board.clone();
-            let delta = child.make(mv); // Get delta
+            let delta = child.make(mv); // Get delta — child.ply is now board.ply + 1
 
-            // Clone accumulator to pass down
-            self.acc[board.ply] = parent_acc;
-            self.acc[board.ply].apply_delta(net, &delta);
+            // Store updated accumulator at child's ply so the recursive call reads it correctly.
+            // BUG WAS: writing to self.acc[board.ply] but the child reads self.acc[child.ply].
+            self.acc[child.ply] = parent_acc;
+            self.acc[child.ply].apply_delta(net, &delta);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 1.0 - beta, 1.0 - alpha, net);
 
@@ -144,6 +145,10 @@ impl Search {
         // and clone the board at his right position in the stack
         self.positions[board.ply] = board.clone();
 
+        // Always initialize the root accumulator from the actual board state.
+        // Search::new() zeroes all accumulators, so this must be done before any eval.
+        self.acc[board.ply] = Accumulator::new(net, board);
+
         let mut moves = generate_moves(board);
         let mut best_mv = moves.trailing_zeros() as u8;
         let mut best_score = f32::NEG_INFINITY;
@@ -154,11 +159,11 @@ impl Search {
             moves &= moves - 1;
 
             let mut child = board.clone();
-            let delta = child.make(mv); // Get delta
+            let delta = child.make(mv); // Get delta — child.ply is now board.ply + 1
 
-            // Clone accumulator to pass down
-            self.acc[board.ply] = parent_acc;
-            self.acc[board.ply].apply_delta(net, &delta);
+            // Store updated accumulator at child's ply so negamax reads it correctly.
+            self.acc[child.ply] = parent_acc;
+            self.acc[child.ply].apply_delta(net, &delta);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net);
             // println!("score {}", score);
@@ -190,6 +195,9 @@ impl Search {
         net: &Network,
         temperature: f32, // 0.0 = deterministic, 1.0 = proportional, >1.0 = more random
     ) -> u8 {
+        // Always initialize the root accumulator from the actual board state.
+        self.acc[board.ply] = Accumulator::new(net, board);
+
         let mut moves = generate_moves(board);
         let mut move_scores = [(0u8, 0f32); 81];
         let mut count = 0;
@@ -200,11 +208,11 @@ impl Search {
             moves &= moves - 1;
 
             let mut child = board.clone();
-            let delta = child.make(mv); // Get delta
+            let delta = child.make(mv); // Get delta — child.ply is now board.ply + 1
 
-            // Clone accumulator to pass down
-            self.acc[board.ply] = parent_acc;
-            self.acc[board.ply].apply_delta(net, &delta);
+            // Store updated accumulator at child's ply so negamax reads it correctly.
+            self.acc[child.ply] = parent_acc;
+            self.acc[child.ply].apply_delta(net, &delta);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net);
             move_scores[count] = (mv, score);

@@ -100,11 +100,16 @@ pub fn tournament(base_net_path: &str, challenger_net_path: &str, num_games: u32
 
                 if challenger_to_move {
                     let mv = challenger_search.think_training(&game, 6, &challenger_net);
+                    let old_ply = game.ply;
                     let delta = game.make(mv);
+                    // Copy old-ply acc to new ply, then apply delta.
+                    challenger_search.acc[game.ply] = challenger_search.acc[old_ply];
                     challenger_search.acc[game.ply].apply_delta(&challenger_net, &delta);
                 } else {
                     let mv = base_search.think_training(&game, 6, &base_net);
+                    let old_ply = game.ply;
                     let delta = game.make(mv);
+                    base_search.acc[game.ply] = base_search.acc[old_ply];
                     base_search.acc[game.ply].apply_delta(&base_net, &delta);
                 };
 

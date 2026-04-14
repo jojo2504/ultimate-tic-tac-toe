@@ -31,7 +31,7 @@ fn main() -> anyhow::Result<()> {
         let elo = tournament(&best_net, &challenger, 200);
         println!("gen{gen_count} vs baseline: {elo:+.1} Elo");
 
-        if elo > -10.0 {
+        if elo > 0.0 {
             println!(
                 "{}",
                 format!("promoting gen{gen_count} as new best").green()
