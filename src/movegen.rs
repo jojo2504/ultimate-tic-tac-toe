@@ -29,7 +29,10 @@ pub fn generate_moves(board: &TicTacToe) -> u128 {
         WINDOW << MAP[current_focus as usize]
     } else {
         (0..81u8)
-            .filter(|&i| (1 << CELL_TO_SUBBOARD_INDEX[i as usize]) as u16 & board.all_clear == 0)
+            .filter(|&i| {
+                let sb = CELL_TO_SUBBOARD_INDEX[i as usize];
+                (board.full_subboard | board.all_clear) & (1 << sb) == 0
+            })
             .fold(0u128, |acc, i| acc | (1 << i))
     };
 

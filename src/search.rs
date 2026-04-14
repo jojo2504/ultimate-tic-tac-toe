@@ -32,7 +32,7 @@ impl TTEntry {
 
 pub struct Search {
     positions: [TicTacToe; 81],
-    tt: HashMap<u64, TTEntry>,
+    tt: HashMap<u128, TTEntry>,
     pub acc: [Accumulator; 81],
 }
 
@@ -56,7 +56,7 @@ impl Search {
         let alpha_orig = alpha;
 
         // transposition table lookup
-        if let Some(tt_entry) = self.tt.get(&(board.zobrist_key as u64)) {
+        if let Some(tt_entry) = self.tt.get(&board.zobrist_key) {
             if tt_entry.depth >= depth {
                 match tt_entry.flag {
                     NodeType::Exact => return tt_entry.value,
@@ -93,6 +93,7 @@ impl Search {
         let mut best_score = f32::NEG_INFINITY;
         let mut moves = generate_moves(board);
 
+        let parent_acc = self.acc[board.ply]; // snapshot
         while moves != 0 {
             let mv: u8 = moves.trailing_zeros() as u8;
             moves &= moves - 1;
@@ -101,6 +102,7 @@ impl Search {
             let delta = child.make(mv); // Get delta
 
             // Clone accumulator to pass down
+            self.acc[board.ply] = parent_acc;
             self.acc[board.ply].apply_delta(net, &delta);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 1.0 - beta, 1.0 - alpha, net);
@@ -126,7 +128,7 @@ impl Search {
         };
 
         self.tt.insert(
-            board.zobrist_key as u64,
+            board.zobrist_key,
             TTEntry {
                 depth,
                 value: best_score,
@@ -146,6 +148,7 @@ impl Search {
         let mut best_mv = moves.trailing_zeros() as u8;
         let mut best_score = f32::NEG_INFINITY;
 
+        let parent_acc = self.acc[board.ply]; // snapshot
         while moves != 0 {
             let mv: u8 = moves.trailing_zeros() as u8;
             moves &= moves - 1;
@@ -154,6 +157,7 @@ impl Search {
             let delta = child.make(mv); // Get delta
 
             // Clone accumulator to pass down
+            self.acc[board.ply] = parent_acc;
             self.acc[board.ply].apply_delta(net, &delta);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net);
@@ -190,12 +194,17 @@ impl Search {
         let mut move_scores = [(0u8, 0f32); 81];
         let mut count = 0;
 
+        let parent_acc = self.acc[board.ply]; // snapshot
         while moves != 0 {
             let mv = moves.trailing_zeros() as u8;
             moves &= moves - 1;
 
             let mut child = board.clone();
-            child.make(mv);
+            let delta = child.make(mv); // Get delta
+
+            // Clone accumulator to pass down
+            self.acc[board.ply] = parent_acc;
+            self.acc[board.ply].apply_delta(net, &delta);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net);
             move_scores[count] = (mv, score);

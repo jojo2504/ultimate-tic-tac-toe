@@ -37,10 +37,10 @@ pub enum Result {
 }
 
 pub struct MoveDelta {
-    pub square: u8,
+    pub square: u8, // 0 - 80
     pub turn: Symbol,
-    pub new_focus: Option<u8>,
-    pub cleared_board: Option<u8>, // if a board was just won/filled
+    pub new_focus: Option<u8>,     // 0 - 8
+    pub cleared_board: Option<u8>, // 0 - 8
 }
 
 #[derive(Default, Clone, Copy)]
@@ -191,22 +191,22 @@ impl TicTacToe {
             _ => unreachable!(),
         };
 
-        // 81 bits — current player raw bitboard
+        // 81 bits — cross player raw bitboard
         for i in 0..81 {
             features[i] = ((cross_bb >> i) & 1) as f32;
         }
 
-        // 81 bits — opponent raw bitboard
+        // 81 bits — circle raw bitboard
         for i in 0..81 {
             features[81 + i] = ((circle_bb >> i) & 1) as f32;
         }
 
-        // 9 bits — current player cleared sub-boards (meta board)
+        // 9 bits — cross player cleared sub-boards (meta board)
         for i in 0..9 {
             features[162 + i] = ((cross_clear >> i) & 1) as f32;
         }
 
-        // 9 bits — opponent cleared sub-boards (meta board)
+        // 9 bits — circle cleared sub-boards (meta board)
         for i in 0..9 {
             features[171 + i] = ((circle_clear >> i) & 1) as f32;
         }

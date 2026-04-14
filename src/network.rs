@@ -229,13 +229,13 @@ impl Accumulator {
         self.add_features(net, &[f]);
 
         if let Some(new) = delta.cleared_board {
-            let f1 = (new.trailing_ones() + feature_offset(delta.turn, 162, 171)) as usize;
+            let f1 = (new as u32 + feature_offset(delta.turn, 162, 171)) as usize;
             let f2 = 180 + new.trailing_zeros() as usize;
             self.add_features(net, &[f1, f2]);
         }
 
         if let Some(new) = delta.new_focus {
-            let idx = 189 + new.trailing_zeros() as usize;
+            let idx = 189 + new as usize;
             self.add_features(net, &[idx]);
         }
     }
