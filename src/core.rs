@@ -36,6 +36,13 @@ pub enum Result {
     Draw,
 }
 
+pub struct MoveDelta {
+    pub square: u8,
+    pub turn: Symbol,
+    pub new_focus: Option<u8>,
+    pub cleared_board: Option<u8>, // if a board was just won/filled
+}
+
 #[derive(Default, Clone, Copy)]
 pub struct TicTacToe {
     // The first 47 (128 - 91) bits will never be used on these bitboards
@@ -69,7 +76,9 @@ impl TicTacToe {
     }
 
     /// Suppose move has already been validated
-    pub fn make(&mut self, square: u8) {
+    pub fn make(&mut self, square: u8) -> MoveDelta {
+        let old_clear = self.all_clear;
+
         self.bitboard ^= 1 << square;
         self.side_bitboard ^= self.bitboard;
 
@@ -84,8 +93,24 @@ impl TicTacToe {
         self.current_focus =
             ((1u16 << CELL_TO_SUBBOARD_FOCUS[square as usize]) & self.all_clear as u16 == 0)
                 .then_some(CELL_TO_SUBBOARD_FOCUS[square as usize]);
+
+        let cleared_board = if self.all_clear != old_clear {
+            Some((self.all_clear ^ old_clear).trailing_zeros() as u8)
+        } else {
+            None
+        };
+
+        let delta = MoveDelta {
+            square,
+            turn: self.turn,
+            new_focus: self.current_focus,
+            cleared_board,
+        };
+
         self.turn = self.turn.swap();
         self.ply += 1;
+
+        delta
     }
 
     /// Used as a helper during a make move\
@@ -142,58 +167,50 @@ impl TicTacToe {
         (self.full_subboard | self.all_clear) == 0b111111111
     }
 
-    /// Returns features from the side-to-move's perspective.
-    pub fn to_features(&self) -> [f32; FEATURES_COUNT] {
-        self.to_features_for_perspective(false)
-    }
-
-    /// Returns features for a given perspective.
-    /// `as_opponent = false` → side-to-move's perspective (STM)
-    /// `as_opponent = true`  → opponent's perspective (NSTM)
+    /// Returns features.
     ///
     /// XOR-toggle invariant: `side_bitboard` always holds the opponent's
     /// pieces, `side_bitboard ^ bitboard` always holds the current
     /// player's pieces — regardless of which side is to move.
-    pub fn to_features_for_perspective(&self, as_opponent: bool) -> [f32; FEATURES_COUNT] {
+    pub fn to_features(&self) -> [f32; FEATURES_COUNT] {
         let mut features = [0.0f32; FEATURES_COUNT];
 
         // Determine which bitboard belongs to whom
         // sbb = opponent's pieces, sbb^bb = current's pieces (always)
-        let (current_bb, opponent_bb, current_clear, opponent_clear) = if !as_opponent {
-            (
+        let (cross_bb, circle_bb, cross_clear, circle_clear) = match self.turn as i32 {
+            1 => (
                 self.side_bitboard ^ self.bitboard,
                 self.side_bitboard,
                 self.side_clear ^ (self.all_clear as u16),
                 self.side_clear,
-            )
-        } else {
-            // Swap perspective: opponent becomes "current"
-            (
+            ),
+            -1 => (
                 self.side_bitboard,
                 self.side_bitboard ^ self.bitboard,
                 self.side_clear,
                 self.side_clear ^ (self.all_clear as u16),
-            )
+            ),
+            _ => unreachable!(),
         };
 
         // 81 bits — current player raw bitboard
         for i in 0..81 {
-            features[i] = ((current_bb >> i) & 1) as f32;
+            features[i] = ((cross_bb >> i) & 1) as f32;
         }
 
         // 81 bits — opponent raw bitboard
         for i in 0..81 {
-            features[81 + i] = ((opponent_bb >> i) & 1) as f32;
+            features[81 + i] = ((circle_bb >> i) & 1) as f32;
         }
 
         // 9 bits — current player cleared sub-boards (meta board)
         for i in 0..9 {
-            features[162 + i] = ((current_clear >> i) & 1) as f32;
+            features[162 + i] = ((cross_clear >> i) & 1) as f32;
         }
 
         // 9 bits — opponent cleared sub-boards (meta board)
         for i in 0..9 {
-            features[171 + i] = ((opponent_clear >> i) & 1) as f32;
+            features[171 + i] = ((circle_clear >> i) & 1) as f32;
         }
 
         // 9 bits — all_clear (dead/drawn sub-boards)
@@ -219,9 +236,9 @@ impl TicTacToe {
 
 impl fmt::Display for TicTacToe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (circle, cross): (u128, u128) = match self.turn as i32 {
-            1 => (self.side_bitboard, self.side_bitboard ^ self.bitboard),
-            -1 => (self.side_bitboard ^ self.bitboard, self.side_bitboard),
+        let (cross, circle): (u128, u128) = match self.turn as i32 {
+            1 => (self.side_bitboard ^ self.bitboard, self.side_bitboard),
+            -1 => (self.side_bitboard, self.side_bitboard ^ self.bitboard),
             _ => unreachable!(),
         };
 

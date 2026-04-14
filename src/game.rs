@@ -29,12 +29,7 @@ pub fn random_game() -> Vec<Sample> {
 
     let mut game = TicTacToe::new();
     while !game.check_win() && !game.is_full() {
-        let mut features = [0.0; crate::constants::FEATURES_COUNT * 2];
-        let stm_features = game.to_features();
-        let nstm_features = game.to_features_for_perspective(true);
-
-        features[..crate::constants::FEATURES_COUNT].copy_from_slice(&stm_features);
-        features[crate::constants::FEATURES_COUNT..].copy_from_slice(&nstm_features);
+        let features = game.to_features();
 
         samples.push(Sample {
             features,
@@ -69,12 +64,7 @@ pub fn start_self_game_with_net(net: &Network) -> Vec<Sample> {
 
     let mut samples = vec![];
     while !game.check_win() && !game.is_full() {
-        let mut features = [0.0; crate::constants::FEATURES_COUNT * 2];
-        let stm_features = game.to_features();
-        let nstm_features = game.to_features_for_perspective(true);
-
-        features[..crate::constants::FEATURES_COUNT].copy_from_slice(&stm_features);
-        features[crate::constants::FEATURES_COUNT..].copy_from_slice(&nstm_features);
+        let features = game.to_features();
 
         samples.push(Sample {
             features,

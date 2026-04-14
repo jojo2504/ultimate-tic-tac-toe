@@ -13,7 +13,7 @@ use crate::{
 
 #[derive(Encode)]
 pub struct Sample {
-    pub features: [f32; FEATURES_COUNT * 2],
+    pub features: [f32; FEATURES_COUNT],
     pub outcome: f32,
 }
 

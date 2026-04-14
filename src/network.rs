@@ -1,14 +1,24 @@
 use bytemuck::{Pod, Zeroable, checked::try_from_bytes};
 use std::fs;
 
-use crate::{constants::FEATURES_COUNT, core::TicTacToe};
+use crate::{
+    constants::FEATURES_COUNT,
+    core::{MoveDelta, Symbol, TicTacToe},
+};
+
+fn feature_offset(symbol: Symbol, cross_off: u32, circle_off: u32) -> u32 {
+    match symbol {
+        Symbol::Cross => cross_off,
+        Symbol::Circle => circle_off,
+    }
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct Network {
     w0: [[f32; FEATURES_COUNT]; 128],
     b0: [f32; 128],
-    w1: [[f32; 256]; 64], // dual perspective
+    w1: [[f32; 128]; 64],
     b1: [f32; 64],
     w2: [[f32; 64]; 1],
     b2: [f32; 1],
@@ -36,7 +46,7 @@ impl Network {
         network
     }
 
-    pub fn forward(&self, acc: &AccumulatorPair) -> f32 {
+    pub fn forward(&self, acc: &Accumulator) -> f32 {
         #[cfg(target_arch = "x86_64")]
         {
             if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
@@ -47,18 +57,17 @@ impl Network {
     }
 
     /// Scalar fallback for non-AVX2 CPUs.
-    fn forward_scalar(&self, acc: &AccumulatorPair) -> f32 {
-        let mut screlu_input = [0f32; 256];
+    fn forward_scalar(&self, acc: &Accumulator) -> f32 {
+        let mut screlu_input = [0f32; 128];
         for j in 0..128 {
-            screlu_input[j] = screlu(acc.stm.0[j]);
-            screlu_input[128 + j] = screlu(acc.nstm.0[j]);
+            screlu_input[j] = screlu(acc.0[j]);
         }
 
         let mut h1 = [0f32; 64];
         for i in 0..64 {
             let mut sum = self.b1[i];
             let w = &self.w1[i];
-            for j in 0..256 {
+            for j in 0..128 {
                 sum += w[j] * screlu_input[j];
             }
             h1[i] = screlu(sum);
@@ -72,36 +81,28 @@ impl Network {
     }
 
     /// AVX2 + FMA SIMD forward pass.
-    /// Layer 1 (the hot loop): 64 neurons × 256 inputs = 16384 multiply-adds,
-    /// done 8-wide with 4-way unrolling → 512 FMA instructions.
+    /// Layer 1 (the hot loop): 64 neurons × 128 inputs = 8192 multiply-adds,
+    /// done 8-wide with 4-way unrolling → 256 FMA instructions.
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2,fma")]
-    unsafe fn forward_avx2(&self, acc: &AccumulatorPair) -> f32 {
+    unsafe fn forward_avx2(&self, acc: &Accumulator) -> f32 {
         use std::arch::x86_64::*;
 
         let zero = _mm256_setzero_ps();
         let one = _mm256_set1_ps(1.0);
 
-        // ── Precompute screlu for all 256 accumulator values ──────────
-        let mut screlu_buf = [0f32; 256];
+        // ── Precompute screlu for all 128 accumulator values ──────────
+        let mut screlu_buf = [0f32; 128];
 
-        // STM (0..128)
-        let stm_ptr = acc.stm.0.as_ptr();
+        let stm_ptr = acc.0.as_ptr();
         let out_ptr = screlu_buf.as_mut_ptr();
         for k in (0..128).step_by(8) {
             let x = _mm256_loadu_ps(stm_ptr.add(k));
             let clamped = _mm256_min_ps(_mm256_max_ps(x, zero), one);
             _mm256_storeu_ps(out_ptr.add(k), _mm256_mul_ps(clamped, clamped));
         }
-        // NSTM (128..256)
-        let nstm_ptr = acc.nstm.0.as_ptr();
-        for k in (0..128).step_by(8) {
-            let x = _mm256_loadu_ps(nstm_ptr.add(k));
-            let clamped = _mm256_min_ps(_mm256_max_ps(x, zero), one);
-            _mm256_storeu_ps(out_ptr.add(128 + k), _mm256_mul_ps(clamped, clamped));
-        }
 
-        // ── Layer 1: 64 neurons, 256 inputs, 4-way unrolled FMA ──────
+        // ── Layer 1: 64 neurons, 128 inputs, 4-way unrolled FMA ──────
         let mut h1 = [0f32; 64];
         let s_ptr = screlu_buf.as_ptr();
 
@@ -113,9 +114,9 @@ impl Network {
             let mut a2 = _mm256_setzero_ps();
             let mut a3 = _mm256_setzero_ps();
 
-            // 256 / 32 = 8 iterations
+            // 128 / 32 = 4 iterations
             let mut j = 0;
-            while j < 256 {
+            while j < 128 {
                 a0 = _mm256_fmadd_ps(
                     _mm256_loadu_ps(w_ptr.add(j)),
                     _mm256_loadu_ps(s_ptr.add(j)),
@@ -189,52 +190,14 @@ impl Network {
 }
 
 #[derive(Clone, Copy)]
-struct Accumulator([f32; 128]);
+pub struct Accumulator(pub [f32; 128]);
 
 impl Accumulator {
-    pub fn new(net: &Network, features: &[usize]) -> Self {
-        let mut acc = net.b0; // start with bias
-        for &feat in features {
-            for i in 0..128 {
-                acc[i] += net.w0[i][feat];
-            }
-        }
-        Accumulator(acc)
-    }
-
-    pub fn add_feature(&mut self, net: &Network, feature: usize) {
-        for i in 0..128 {
-            self.0[i] += net.w0[i][feature];
-        }
-    }
-
-    pub fn sub_feature() {
-        unimplemented!("Not really important to implement")
-    }
-}
-
-impl Default for Accumulator {
-    fn default() -> Self {
-        Self([0.0; 128])
-    }
-}
-
-#[derive(Default, Copy, Clone)]
-pub struct AccumulatorPair {
-    stm: Accumulator,
-    nstm: Accumulator,
-}
-
-impl AccumulatorPair {
     pub fn new(net: &Network, board: &TicTacToe) -> Self {
         // stm: features from current player's perspective
         let stm_features = board.to_features();
 
-        // nstm: features from opponent's perspective (no turn-flip hack)
-        let nstm_features = board.to_features_for_perspective(true);
-
         let mut stm_acc = net.b0;
-        let mut nstm_acc = net.b0;
 
         for i in 0..FEATURES_COUNT {
             if stm_features[i] != 0.0 {
@@ -242,20 +205,44 @@ impl AccumulatorPair {
                     stm_acc[j] += net.w0[j][i];
                 }
             }
-            if nstm_features[i] != 0.0 {
-                for j in 0..128 {
-                    nstm_acc[j] += net.w0[j][i];
-                }
-            }
         }
 
-        AccumulatorPair {
-            stm: Accumulator(stm_acc),
-            nstm: Accumulator(nstm_acc),
+        Accumulator(stm_acc)
+    }
+
+    pub fn add_features(&mut self, net: &Network, features: &[usize]) {
+        for i in 0..128 {
+            for &f in features {
+                self.0[i] += net.w0[i][f];
+            }
         }
     }
 
-    pub fn swap_perspective(&mut self) {
-        std::mem::swap(&mut self.stm, &mut self.nstm);
+    pub fn sub_feature(&mut self, net: &Network, feature: usize) {
+        for i in 0..128 {
+            self.0[i] -= net.w0[i][feature];
+        }
+    }
+
+    pub fn apply_delta(&mut self, net: &Network, delta: &MoveDelta) {
+        let f = (delta.square as u32 + feature_offset(delta.turn, 0, 81)) as usize;
+        self.add_features(net, &[f]);
+
+        if let Some(new) = delta.cleared_board {
+            let f1 = (new.trailing_ones() + feature_offset(delta.turn, 162, 171)) as usize;
+            let f2 = 180 + new.trailing_zeros() as usize;
+            self.add_features(net, &[f1, f2]);
+        }
+
+        if let Some(new) = delta.new_focus {
+            let idx = 189 + new.trailing_zeros() as usize;
+            self.add_features(net, &[idx]);
+        }
+    }
+}
+
+impl Default for Accumulator {
+    fn default() -> Self {
+        Self([0.0; 128])
     }
 }

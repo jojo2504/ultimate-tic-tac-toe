@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     core::{Result, TicTacToe},
     movegen::generate_moves,
-    network::{AccumulatorPair, Network},
+    network::{Accumulator, Network},
 };
 
 #[derive(Default, Clone)]
@@ -31,17 +31,17 @@ impl TTEntry {
 }
 
 pub struct Search {
-    pub tt: HashMap<u128, TTEntry>, // zobrist_key, TTEntry
     positions: [TicTacToe; 81],
-    acc: [AccumulatorPair; 81],
+    tt: HashMap<u64, TTEntry>,
+    acc: [Accumulator; 81],
 }
 
 impl Search {
     pub fn new() -> Self {
         Self {
-            tt: HashMap::default(),
-            positions: [TicTacToe::default(); 81],
-            acc: [AccumulatorPair::default(); 81],
+            positions: [TicTacToe::new(); 81],
+            tt: HashMap::new(),
+            acc: [Accumulator::default(); 81],
         }
     }
 
@@ -56,7 +56,7 @@ impl Search {
         let alpha_orig = alpha;
 
         // transposition table lookup
-        if let Some(tt_entry) = self.tt.get(&board.zobrist_key) {
+        if let Some(tt_entry) = self.tt.get(&(board.zobrist_key as u64)) {
             if tt_entry.depth >= depth {
                 match tt_entry.flag {
                     NodeType::Exact => return tt_entry.value,
@@ -87,8 +87,7 @@ impl Search {
         }
 
         if depth == 0 {
-            let acc = AccumulatorPair::new(net, board);
-            return net.forward(&acc); // [0.0, 1.0] from current player's perspective
+            return net.forward(&self.acc[board.ply]); // [0.0, 1.0] from current player's perspective
         }
 
         let mut best_score = f32::NEG_INFINITY;
@@ -99,7 +98,10 @@ impl Search {
             moves &= moves - 1;
 
             let mut child = board.clone();
-            child.make(mv);
+            let delta = child.make(mv); // Get delta
+
+            // Clone accumulator to pass down
+            self.acc[board.ply].apply_delta(net, &delta);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 1.0 - beta, 1.0 - alpha, net);
 
@@ -124,7 +126,7 @@ impl Search {
         };
 
         self.tt.insert(
-            board.zobrist_key,
+            board.zobrist_key as u64,
             TTEntry {
                 depth,
                 value: best_score,

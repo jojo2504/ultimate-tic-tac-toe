@@ -7,7 +7,7 @@ use std::process::Command;
 use ultimate_tic_tac_toe::train::{self, tournament};
 
 fn main() -> anyhow::Result<()> {
-    let mut gen_count = 12;
+    let mut gen_count = 1;
     let mut best_net = format!("databin/gen{}_weights.bin", gen_count - 1);
 
     loop {
