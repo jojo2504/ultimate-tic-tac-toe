@@ -16,7 +16,7 @@ from torch.utils.data import ConcatDataset, DataLoader, TensorDataset
 FEATURES = 199
 LABEL = 1
 ROW_SIZE = FEATURES + LABEL  # 200
-EPOCHS = 40
+EPOCHS = 10
 BATCH_SIZE = 8192
 LEARNING_RATE = 0.001
 
@@ -105,23 +105,26 @@ def build_windowed_dataset(
 
     print(f"\nTraining window: generations {selected}")
 
-    sub_datasets = []
+    X_list = []
+    y_list = []
     for gen in selected:
         path = os.path.join(databin_dir, f"gen{gen}_data.bin")
         if not os.path.exists(path):
             print(f"  [warn] {path} missing, skipping")
             continue
         X, y = load_samples(path)
-        ds = TensorDataset(X, y)
         repeats = int(newest_weight) if gen == selected[-1] else 1
-        sub_datasets.extend([ds] * repeats)
+        for _ in range(repeats):
+            X_list.append(X)
+            y_list.append(y)
 
-    if not sub_datasets:
+    if not X_list:
         raise RuntimeError("No data loaded — all generation files were missing.")
 
-    combined = ConcatDataset(sub_datasets)
-    print(f"\nTotal samples in training window: {len(combined):,}\n")
-    return combined
+    X_all = torch.cat(X_list, dim=0)
+    y_all = torch.cat(y_list, dim=0)
+    print(f"\nTotal samples in training window: {len(X_all):,}\n")
+    return X_all, y_all
 
 
 # ─────────────────────────────────────────────
@@ -141,12 +144,6 @@ class SinglePerspectiveNNUE(nn.Module):
         self.screlu = SCReLU()
 
     def forward(self, x):
-        # BUG FIXED #4 – missing activation before fc1 output:
-        #   The original code applied screlu after fc1 but that means the
-        #   gradient into fc2 is always non-negative (SCReLU ≥ 0), which
-        #   severely limits expressive power of the output layer.
-        #   The correct NNUE pattern is: accumulate → screlu → fc1 → screlu → fc2
-        #   This was already structurally present but is preserved here explicitly.
         acc = self.fc0(x)
         l1_in = self.screlu(acc)
         l1_out = self.screlu(self.fc1(l1_in))
@@ -177,22 +174,20 @@ def train(gen_count: int, base_weights: Optional[str] = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # ── Build windowed dataset ─────────────────────────────────────────
-    dataset = build_windowed_dataset(
+    # ── Build windowed tensors and move to VRAM ────────────────────────
+    X_all, y_all = build_windowed_dataset(
         current_gen=gen_count,
         window=GEN_WINDOW,
         newest_weight=NEWEST_GEN_WEIGHT,
     )
 
-    loader = DataLoader(
-        dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        pin_memory=(device.type == "cuda"),
-        # BUG FIXED #5 – pin_memory on CPU causes a warning + minor slowdown;
-        # only enable it when actually using CUDA.
-        num_workers=0,
-    )
+    print("Moving dataset to GPU VRAM...")
+    t0 = time.time()
+    X_all = X_all.to(device)
+    y_all = y_all.to(device)
+    print(f"Dataset moved in {time.time() - t0:.2f}s")
+
+    n_samples = len(X_all)
 
     model = SinglePerspectiveNNUE(features=FEATURES, hl=128)
     if base_weights and os.path.exists(base_weights):
@@ -203,24 +198,6 @@ def train(gen_count: int, base_weights: Optional[str] = None):
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    # BUG FIXED #6 – optimizer.zero_grad() called AFTER loss.backward():
-    #   In the original code the order was:
-    #       pred  = model(X)
-    #       loss  = loss_fn(pred, y)
-    #       optimizer.zero_grad()   ← gradients zeroed AFTER accumulation is irrelevant here
-    #       loss.backward()
-    #       optimizer.step()
-    #   Actually the original order zero_grad → backward → step is fine when
-    #   called once per batch. BUT it was placed after the loss computation,
-    #   which means if an exception occurs between forward and zero_grad the
-    #   next iteration accumulates stale gradients. The canonical safe order is:
-    #       optimizer.zero_grad()
-    #       pred  = model(X)
-    #       loss  = loss_fn(pred, y)
-    #       loss.backward()
-    #       optimizer.step()
-    #   (fixed below)
-
     loss_fn = nn.BCELoss()
 
     print("Starting training …")
@@ -230,9 +207,14 @@ def train(gen_count: int, base_weights: Optional[str] = None):
         epoch_loss = 0.0
         batches = 0
 
-        for batch_X, batch_y in loader:
-            batch_X = batch_X.to(device)
-            batch_y = batch_y.to(device)
+        # Fast in-VRAM shuffle
+        indices = torch.randperm(n_samples, device=device)
+        X_shuffled = X_all[indices]
+        y_shuffled = y_all[indices]
+
+        for start_idx in range(0, n_samples, BATCH_SIZE):
+            batch_X = X_shuffled[start_idx : start_idx + BATCH_SIZE]
+            batch_y = y_shuffled[start_idx : start_idx + BATCH_SIZE]
 
             optimizer.zero_grad()  # ← correct position
             pred = model(batch_X)

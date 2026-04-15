@@ -31,7 +31,6 @@ impl TTEntry {
 }
 
 pub struct Search {
-    positions: [TicTacToe; 81],
     tt: HashMap<u128, TTEntry>,
     pub acc: [Accumulator; 81],
 }
@@ -39,7 +38,6 @@ pub struct Search {
 impl Search {
     pub fn new() -> Self {
         Self {
-            positions: [TicTacToe::new(); 81],
             tt: HashMap::new(),
             acc: [Accumulator::default(); 81],
         }
@@ -52,6 +50,7 @@ impl Search {
         mut alpha: f32,
         beta: f32,
         net: &Network,
+        acc: Accumulator,
     ) -> f32 {
         let alpha_orig = alpha;
 
@@ -87,13 +86,12 @@ impl Search {
         }
 
         if depth == 0 {
-            return net.forward(&self.acc[board.ply]); // [0.0, 1.0] from current player's perspective
+            return net.forward(&acc); // [0.0, 1.0] from current player's perspective
         }
 
         let mut best_score = f32::NEG_INFINITY;
         let mut moves = generate_moves(board);
 
-        let parent_acc = self.acc[board.ply]; // snapshot
         while moves != 0 {
             let mv: u8 = moves.trailing_zeros() as u8;
             moves &= moves - 1;
@@ -101,10 +99,11 @@ impl Search {
             let mut child = board.clone();
             let delta = child.make(mv); // Get delta — child.ply is now board.ply + 1
 
-            self.acc[child.ply] = parent_acc;
-            self.acc[child.ply].apply_delta(net, &delta);
+            let mut child_acc = acc;
+            child_acc.apply_delta(net, &delta);
 
-            let score = 1.0 - self.negamax(&child, depth - 1, 1.0 - beta, 1.0 - alpha, net);
+            let score =
+                1.0 - self.negamax(&child, depth - 1, 1.0 - beta, 1.0 - alpha, net, child_acc);
 
             if score > best_score {
                 best_score = score;
@@ -139,19 +138,13 @@ impl Search {
     }
 
     pub fn think(&mut self, board: &TicTacToe, depth: i32, net: &Network) -> u8 {
-        // sync the positions with the ply given by the board passed in parameters
-        // and clone the board at his right position in the stack
-        self.positions[board.ply] = board.clone();
-
         // Always initialize the root accumulator from the actual board state.
-        // Search::new() zeroes all accumulators, so this must be done before any eval.
-        self.acc[board.ply] = Accumulator::new(net, board);
+        let root_acc = Accumulator::new(net, board);
 
         let mut moves = generate_moves(board);
         let mut best_mv = moves.trailing_zeros() as u8;
         let mut best_score = f32::NEG_INFINITY;
 
-        let parent_acc = self.acc[board.ply]; // snapshot
         while moves != 0 {
             let mv: u8 = moves.trailing_zeros() as u8;
             moves &= moves - 1;
@@ -159,11 +152,10 @@ impl Search {
             let mut child = board.clone();
             let delta = child.make(mv); // Get delta — child.ply is now board.ply + 1
 
-            // Store updated accumulator at child's ply so negamax reads it correctly.
-            self.acc[child.ply] = parent_acc;
-            self.acc[child.ply].apply_delta(net, &delta);
+            let mut child_acc = root_acc;
+            child_acc.apply_delta(net, &delta);
 
-            let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net);
+            let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc);
             // println!("score {}", score);
             if score > best_score {
                 best_score = score;
@@ -175,9 +167,9 @@ impl Search {
     }
 
     pub fn think_training(&mut self, board: &TicTacToe, depth: i32, net: &Network) -> u8 {
-        let temperature = if board.ply < 10 {
+        let temperature = if board.ply < 2 {
             1.0 // opening: explore freely
-        } else if board.ply < 25 {
+        } else if board.ply < 10 {
             0.5 // midgame: some noise
         } else {
             0.0 // endgame: play best move
@@ -194,13 +186,12 @@ impl Search {
         temperature: f32, // 0.0 = deterministic, 1.0 = proportional, >1.0 = more random
     ) -> u8 {
         // Always initialize the root accumulator from the actual board state.
-        self.acc[board.ply] = Accumulator::new(net, board);
+        let root_acc = Accumulator::new(net, board);
 
         let mut moves = generate_moves(board);
         let mut move_scores = [(0u8, 0f32); 81];
         let mut count = 0;
 
-        let parent_acc = self.acc[board.ply]; // snapshot
         while moves != 0 {
             let mv = moves.trailing_zeros() as u8;
             moves &= moves - 1;
@@ -208,11 +199,10 @@ impl Search {
             let mut child = board.clone();
             let delta = child.make(mv); // Get delta — child.ply is now board.ply + 1
 
-            // Store updated accumulator at child's ply so negamax reads it correctly.
-            self.acc[child.ply] = parent_acc;
-            self.acc[child.ply].apply_delta(net, &delta);
+            let mut child_acc = root_acc;
+            child_acc.apply_delta(net, &delta);
 
-            let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net);
+            let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc);
             move_scores[count] = (mv, score);
             count += 1;
         }
