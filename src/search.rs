@@ -101,8 +101,6 @@ impl Search {
             let mut child = board.clone();
             let delta = child.make(mv); // Get delta — child.ply is now board.ply + 1
 
-            // Store updated accumulator at child's ply so the recursive call reads it correctly.
-            // BUG WAS: writing to self.acc[board.ply] but the child reads self.acc[child.ply].
             self.acc[child.ply] = parent_acc;
             self.acc[child.ply].apply_delta(net, &delta);
 

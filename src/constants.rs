@@ -63,16 +63,7 @@ pub const CELL_TO_SUBBOARD_FOCUS: [u8; 81] = {
     arr
 };
 
-/// ```
-/// let h1 = 0b111u128;
-/// let h2 = 0b111000000000u128;
-/// let h3 = 0b111000000000000000000u128;
-/// let v1 = 0b1000000001000000001u128;
-/// let v2 = 0b10000000010000000010u128;
-/// let v3 = 0b100000000100000000100u128;
-/// let diag = 0b100000000010000000001u128;
-/// let anti_diag = 0b1000000010000000100u128;
-/// /// ```
+// Need to be at least u128 to contains 81 bits
 pub const CHECKERS: [u128; 8] = [
     0b111u128,
     0b111000000000u128,
@@ -84,17 +75,7 @@ pub const CHECKERS: [u128; 8] = [
     0b1000000010000000100u128,
 ];
 
-/// ```
-/// let h1 = 0b111u128;
-/// let h2 = 0b111000000000u128;
-/// let h3 = 0b111000000000000000000u128;
-/// let v1 = 0b1000000001000000001u128;
-/// let v2 = 0b10000000010000000010u128;
-/// let v3 = 0b100000000100000000100u128;
-/// let diag = 0b100000000010000000001u128;
-/// let anti_diag = 0b1000000010000000100u128;
-/// ```
-/// Need to be at least u16 to contains 9 bits
+// Need to be at least u16 to contains 9 bits
 pub const FINAL_CHECKERS: [u16; 8] = [
     0b111u16,
     0b111000u16,

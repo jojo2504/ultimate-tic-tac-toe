@@ -189,7 +189,7 @@ impl Network {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Accumulator(pub [f32; 128]);
 
 impl Accumulator {
