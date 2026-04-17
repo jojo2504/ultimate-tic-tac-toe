@@ -33,6 +33,7 @@ pub fn random_game() -> Vec<Sample> {
 
         samples.push(Sample {
             features,
+            search_score: 0.5,
             outcome: 0.0,
         }); // outcome filled later
 
@@ -62,18 +63,32 @@ pub fn start_self_game_with_net(net: &Network, depth: i32) -> Vec<Sample> {
     let mut game = TicTacToe::new();
     let mut search = Search::new();
 
-    let mut samples = vec![];
+    struct PushedSample {
+        sample: Sample,
+        ply: usize,
+    }
+    let mut pushed_samples = vec![];
+
     while !game.check_win() && !game.is_full() {
         let features = game.to_features();
+        let ply = game.ply;
 
-        let move_square = search.think_training(&game, depth, &net);
+        let (move_square, search_score) = search.think_training_scored(&game, depth, &net);
 
-        samples.push(Sample {
-            features,
-            outcome: 0.0,
+        pushed_samples.push(PushedSample {
+            sample: Sample {
+                features,
+                search_score: search_score.clamp(0.0, 1.0),
+                outcome: 0.0,
+            },
+            ply,
         });
 
-        game.make(move_square);
+        let delta = game.make(move_square);
+
+        if delta.cleared_board.is_some() {
+            pushed_samples.pop();
+        }
     }
 
     let outcome = match game.check_win() {
@@ -81,14 +96,17 @@ pub fn start_self_game_with_net(net: &Network, depth: i32) -> Vec<Sample> {
         false => 0.5,
     };
 
-    let n = samples.len();
-    for (i, s) in samples.iter_mut().enumerate() {
-        s.outcome = if (n - 1 - i) % 2 == 0 {
+    let final_ply = game.ply;
+    let mut final_samples = vec![];
+
+    for mut ps in pushed_samples {
+        ps.sample.outcome = if (final_ply - 1 - ps.ply) % 2 == 0 {
             outcome
         } else {
             1.0 - outcome
         };
+        final_samples.push(ps.sample);
     }
 
-    samples
+    final_samples
 }

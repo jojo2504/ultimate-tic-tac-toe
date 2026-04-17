@@ -14,8 +14,9 @@ from torch.utils.data import ConcatDataset, DataLoader, TensorDataset
 # Hyperparameters
 # ─────────────────────────────────────────────
 FEATURES = 199
+SCORE = 1
 LABEL = 1
-ROW_SIZE = FEATURES + LABEL  # 200
+ROW_SIZE = FEATURES + SCORE + LABEL  # 201
 EPOCHS = 10
 BATCH_SIZE = 8192
 LEARNING_RATE = 0.0005
@@ -49,7 +50,9 @@ def load_samples(path: str):
             data = data.reshape(n, ROW_SIZE)
 
             X = torch.tensor(data[:, :FEATURES]).float()
-            y = torch.tensor(data[:, FEATURES:]).float()
+            search_scores = torch.tensor(data[:, FEATURES:FEATURES+SCORE]).float()
+            outcomes = torch.tensor(data[:, FEATURES+SCORE:]).float()
+            y = 0.8 * search_scores + 0.2 * outcomes
 
             # ── BUG #1: validate label range ──────────────────────────
             y_min, y_max = y.min().item(), y.max().item()

@@ -63,8 +63,8 @@ fn cleanup_old_generations(current_gen: i32) -> usize {
 }
 
 fn main() -> anyhow::Result<()> {
-    let mut gen_count = 177;
-    let mut best_gen = 175;
+    let mut gen_count = 1;
+    let mut best_gen = 0;
     let mut best_net = format!("databin/gen{}_weights.bin", gen_count - 1);
     let fixed_net = format!("databin/gen0_weights.bin"); // this fixed net is to measure how well and confirming our network is training
 
@@ -151,9 +151,6 @@ fn main() -> anyhow::Result<()> {
             );
             best_net = challenger;
             best_gen = gen_count;
-            println!("{}", "Checking if net is training well:".cyan());
-            let elo = tournament(&fixed_net, &best_net, 500, depth);
-            println!("gen{gen_count} vs fixed_net: {elo:+.1} Elo");
         } else {
             println!(
                 "{}",

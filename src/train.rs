@@ -14,6 +14,7 @@ use crate::{
 #[derive(Encode)]
 pub struct Sample {
     pub features: [f32; FEATURES_COUNT],
+    pub search_score: f32,
     pub outcome: f32,
 }
 
@@ -65,6 +66,7 @@ fn flush_samples(samples: &[Sample], gen_count: i32) -> anyhow::Result<()> {
         for f in &s.features {
             writer.write_all(&f.to_le_bytes())?;
         }
+        writer.write_all(&s.search_score.to_le_bytes())?;
         writer.write_all(&s.outcome.to_le_bytes())?;
     }
     writer.flush()?;
