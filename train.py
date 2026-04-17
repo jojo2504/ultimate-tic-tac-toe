@@ -18,12 +18,12 @@ LABEL = 1
 ROW_SIZE = FEATURES + LABEL  # 200
 EPOCHS = 10
 BATCH_SIZE = 8192
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.0005
 
 # Training-window config:
 #   GEN_WINDOW = N  → use the last N generations (e.g. 5)
 #   GEN_WINDOW = 0  → use ALL available generations
-GEN_WINDOW = 0  # use ALL available generations
+GEN_WINDOW = 20
 
 # Weight of the newest generation relative to older ones.
 # 1.0 = equal weight; 2.0 = newest sampled twice as often, etc.

@@ -37,15 +37,15 @@ pub enum Result {
 }
 
 pub struct MoveDelta {
-    pub square: u8, // 0 - 80
-    pub turn: Symbol,
-    pub new_focus: Option<u8>,     // 0 - 8
-    pub cleared_board: Option<u8>, // 0 - 8
+    pub square: u8,                // 0 - 80
+    pub turn: Symbol,              // who made this move (before swap)
+    pub old_focus: Option<u8>,     // FIX B: focus BEFORE the move (needed for subtraction)
+    pub new_focus: Option<u8>,     // focus AFTER the move
+    pub cleared_board: Option<u8>, // 0 - 8 if a sub-board was won/drawn this move
 }
 
 #[derive(Default, Clone, Copy)]
 pub struct TicTacToe {
-    // The first 47 (128 - 91) bits will never be used on these bitboards
     pub bitboard: u128,
     pub side_bitboard: u128,
     pub zobrist_key: u128,
@@ -75,9 +75,10 @@ impl TicTacToe {
         anyhow::bail!("invalid move");
     }
 
-    /// Suppose move has already been validated
+    /// Suppose move has already been validated.
     pub fn make(&mut self, square: u8) -> MoveDelta {
         let old_clear = self.all_clear;
+        let old_focus = self.current_focus;
 
         self.bitboard ^= 1 << square;
         self.side_bitboard ^= self.bitboard;
@@ -87,12 +88,23 @@ impl TicTacToe {
 
         if let Some(board_index) = self.check_board_clear(square) {
             self.all_clear ^= 1 << board_index;
+            self.zobrist_key ^= ZOBRIST_TABLE.token_all_clear[board_index as usize];
         }
         self.side_clear ^= self.all_clear;
+
+        match old_focus {
+            Some(f) => self.zobrist_key ^= ZOBRIST_TABLE.token_focus[f as usize],
+            None => self.zobrist_key ^= ZOBRIST_TABLE.token_focus[9],
+        }
 
         self.current_focus =
             ((1u16 << CELL_TO_SUBBOARD_FOCUS[square as usize]) & self.all_clear as u16 == 0)
                 .then_some(CELL_TO_SUBBOARD_FOCUS[square as usize]);
+
+        match self.current_focus {
+            Some(f) => self.zobrist_key ^= ZOBRIST_TABLE.token_focus[f as usize],
+            None => self.zobrist_key ^= ZOBRIST_TABLE.token_focus[9],
+        }
 
         let cleared_board = if self.all_clear != old_clear {
             Some((self.all_clear ^ old_clear).trailing_zeros() as u8)
@@ -103,6 +115,7 @@ impl TicTacToe {
         let delta = MoveDelta {
             square,
             turn: self.turn,
+            old_focus, // FIX B
             new_focus: self.current_focus,
             cleared_board,
         };
@@ -113,9 +126,6 @@ impl TicTacToe {
         delta
     }
 
-    /// Used as a helper during a make move\
-    /// Returns the nth bit 0 to 8 of the current cleared board.\
-    /// Doesn't return a bitboard.
     fn check_board_clear(&mut self, square: u8) -> Option<u8> {
         let base = CELL_TO_SUBBOARD_BASE[square as usize];
         let mask = &self.side_bitboard;
@@ -134,8 +144,6 @@ impl TicTacToe {
         None
     }
 
-    /// Used as a helper after a make move\
-    /// Returns true if a player cleared 3 aligned boards.
     pub fn check_win(&self) -> bool {
         let mask = &self.side_clear;
         FINAL_CHECKERS
@@ -152,7 +160,6 @@ impl TicTacToe {
         self.check_win() || self.check_draw()
     }
 
-    // give the result from the current player perspective
     pub fn result(&self) -> Result {
         if self.check_win() {
             return Result::Win;
@@ -167,63 +174,46 @@ impl TicTacToe {
         (self.full_subboard | self.all_clear) == 0b111111111
     }
 
-    /// Returns features.
+    /// Features are always laid out as (STM = side to move, NSTM = opponent):
+    ///   [  0.. 80] STM  piece squares     (81 bits)
+    ///   [ 81..161] NSTM piece squares     (81 bits)
+    ///   [162..170] STM  cleared meta-board (9 bits)
+    ///   [171..179] NSTM cleared meta-board (9 bits)
+    ///   [180..188] all_clear (symmetric)   (9 bits)
+    ///   [189..197] current_focus one-hot   (9 bits)
+    ///   [198]      free-choice flag
     ///
-    /// XOR-toggle invariant: `side_bitboard` always holds the opponent's
-    /// pieces, `side_bitboard ^ bitboard` always holds the current
-    /// player's pieces — regardless of which side is to move.
+    /// Previously, indices 0..81 were always Cross regardless of whose turn it was,
+    /// causing the network to see identical inputs for contradictory targets.
     pub fn to_features(&self) -> [f32; FEATURES_COUNT] {
         let mut features = [0.0f32; FEATURES_COUNT];
 
-        let (cross_bb, circle_bb, cross_clear, circle_clear) = match self.turn as i32 {
-            1 => (
-                self.side_bitboard ^ self.bitboard,
-                self.side_bitboard,
-                self.side_clear ^ (self.all_clear as u16),
-                self.side_clear,
-            ),
-            -1 => (
-                self.side_bitboard,
-                self.side_bitboard ^ self.bitboard,
-                self.side_clear,
-                self.side_clear ^ (self.all_clear as u16),
-            ),
-            _ => unreachable!(),
-        };
+        // Bitboard invariant after make():
+        //   side_bitboard           = NSTM pieces
+        //   side_bitboard ^ bitboard = STM  pieces
+        let stm_bb = self.side_bitboard ^ self.bitboard;
+        let nstm_bb = self.side_bitboard;
 
-        // 81 bits — cross player raw bitboard
+        // Cleared-board invariant (proved by tracing make()):
+        //   stm_clear  = side_clear ^ all_clear
+        //   nstm_clear = side_clear
+        let stm_clear = self.side_clear ^ self.all_clear as u16;
+        let nstm_clear = self.side_clear;
+
         for i in 0..81 {
-            features[i] = ((cross_bb >> i) & 1) as f32;
+            features[i] = ((stm_bb >> i) & 1) as f32;
+            features[81 + i] = ((nstm_bb >> i) & 1) as f32;
         }
-
-        // 81 bits — circle raw bitboard
-        for i in 0..81 {
-            features[81 + i] = ((circle_bb >> i) & 1) as f32;
-        }
-
-        // 9 bits — cross player cleared sub-boards (meta board)
         for i in 0..9 {
-            features[162 + i] = ((cross_clear >> i) & 1) as f32;
-        }
-
-        // 9 bits — circle cleared sub-boards (meta board)
-        for i in 0..9 {
-            features[171 + i] = ((circle_clear >> i) & 1) as f32;
-        }
-
-        // 9 bits — all_clear (dead/drawn sub-boards)
-        for i in 0..9 {
+            features[162 + i] = ((stm_clear >> i) & 1) as f32;
+            features[171 + i] = ((nstm_clear >> i) & 1) as f32;
             features[180 + i] = ((self.all_clear >> i) & 1) as f32;
         }
-
-        // 10 bits — current_focus as one-hot + free choice flag
         match self.current_focus {
-            Some(focus) => {
-                features[189 + focus as usize] = 1.0; // one-hot
-                features[198] = 0.0; // not free
+            Some(f) => {
+                features[189 + f as usize] = 1.0;
             }
             None => {
-                // all focus bits stay 0, free choice flag = 1
                 features[198] = 1.0;
             }
         }
@@ -234,9 +224,11 @@ impl TicTacToe {
 
 impl fmt::Display for TicTacToe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (cross, circle): (u128, u128) = match self.turn as i32 {
-            1 => (self.side_bitboard ^ self.bitboard, self.side_bitboard),
-            -1 => (self.side_bitboard, self.side_bitboard ^ self.bitboard),
+        let stm_bb = self.side_bitboard ^ self.bitboard;
+        let nstm_bb = self.side_bitboard;
+        let (cross, circle) = match self.turn as i32 {
+            1 => (stm_bb, nstm_bb),
+            -1 => (nstm_bb, stm_bb),
             _ => unreachable!(),
         };
 
@@ -246,7 +238,6 @@ impl fmt::Display for TicTacToe {
         for row in 0..9 {
             let row_start = row * 9;
             write!(f, "{}", format!("{:2}  │", row_start).dimmed())?;
-
             for col in 0..9 {
                 let bit = row_start + col;
                 let mask = 1u128 << bit;
@@ -264,7 +255,6 @@ impl fmt::Display for TicTacToe {
             }
             write!(f, "{}", "│".dimmed())?;
             writeln!(f)?;
-
             if row == 2 || row == 5 {
                 writeln!(f, "{}", "    ├─────────┼─────────┼─────────┤".dimmed())?;
             }
@@ -275,21 +265,31 @@ impl fmt::Display for TicTacToe {
 }
 
 struct Zobrist {
-    token_square: [u128; 81 * 2], // 42 * 2
+    token_square: [u128; 81 * 2],
+    token_focus: [u128; 10], // [0..8] board focus, [9] free-choice
+    token_all_clear: [u128; 9],
 }
 
 impl Default for Zobrist {
     fn default() -> Self {
         Self {
             token_square: [0u128; 81 * 2],
+            token_focus: [0u128; 10],
+            token_all_clear: [0u128; 9],
         }
     }
 }
 
 static ZOBRIST_TABLE: Lazy<Zobrist> = Lazy::new(|| {
     let mut z = Zobrist::default();
-    for i in 0..z.token_square.len() {
-        z.token_square[i] = random();
+    for v in z.token_square.iter_mut() {
+        *v = random();
+    }
+    for v in z.token_focus.iter_mut() {
+        *v = random();
+    }
+    for v in z.token_all_clear.iter_mut() {
+        *v = random();
     }
     z
 });
@@ -301,7 +301,6 @@ impl Zobrist {
             -1 => 1,
             _ => unreachable!(),
         };
-
         (offset as u8 * 81 + play.0) as usize
     }
 }

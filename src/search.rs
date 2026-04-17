@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     core::{Result, TicTacToe},
     movegen::generate_moves,
-    network::{Accumulator, Network},
+    network::{DualAccumulator, Network},
 };
 
 #[derive(Default, Clone)]
@@ -22,24 +22,18 @@ pub struct TTEntry {
     value: f32,
 }
 
-impl TTEntry {
-    pub fn new() -> Self {
-        Self {
-            ..Default::default()
-        }
-    }
-}
-
 pub struct Search {
     tt: HashMap<u128, TTEntry>,
-    pub acc: [Accumulator; 81],
+    /// External accumulator stack for caller-side incremental updates
+    /// (used in tournament() and similar drivers).
+    pub acc: [DualAccumulator; 81],
 }
 
 impl Search {
     pub fn new() -> Self {
         Self {
             tt: HashMap::new(),
-            acc: [Accumulator::default(); 81],
+            acc: [DualAccumulator::default(); 81],
         }
     }
 
@@ -50,11 +44,11 @@ impl Search {
         mut alpha: f32,
         beta: f32,
         net: &Network,
-        acc: Accumulator,
+        dual_acc: DualAccumulator,
     ) -> f32 {
         let alpha_orig = alpha;
 
-        // transposition table lookup
+        // Transposition table lookup
         if let Some(tt_entry) = self.tt.get(&board.zobrist_key) {
             if tt_entry.depth >= depth {
                 match tt_entry.flag {
@@ -74,19 +68,18 @@ impl Search {
             }
         }
 
-        // terminal / leaf
+        // Terminal
         if board.is_game_over() {
-            // check_win() tests side_clear which holds the LAST MOVER's clears
-            // (opponent of current side-to-move). So Win = current player lost.
             return match board.result() {
-                Result::Win => 0.0,  // opponent (last mover) won → we lost
+                Result::Win => 0.0,  // opponent (last mover) won → current player lost
                 Result::Loss => 1.0, // unreachable at terminal, but consistent
                 Result::Draw => 0.5,
             };
         }
 
+        // Leaf evaluation — FIX B: use the correct perspective half
         if depth == 0 {
-            return net.forward(&acc); // [0.0, 1.0] from current player's perspective
+            return net.forward(dual_acc.stm(board.turn));
         }
 
         let mut best_score = f32::NEG_INFINITY;
@@ -97,9 +90,9 @@ impl Search {
             moves &= moves - 1;
 
             let mut child = board.clone();
-            let delta = child.make(mv); // Get delta — child.ply is now board.ply + 1
+            let delta = child.make(mv);
 
-            let mut child_acc = acc;
+            let mut child_acc = dual_acc;
             child_acc.apply_delta(net, &delta);
 
             let score =
@@ -116,7 +109,6 @@ impl Search {
             }
         }
 
-        // store in transposition table
         let flag = if best_score <= alpha_orig {
             NodeType::UpperBound
         } else if best_score >= beta {
@@ -138,8 +130,7 @@ impl Search {
     }
 
     pub fn think(&mut self, board: &TicTacToe, depth: i32, net: &Network) -> u8 {
-        // Always initialize the root accumulator from the actual board state.
-        let root_acc = Accumulator::new(net, board);
+        let root_acc = DualAccumulator::new(net, board);
 
         let mut moves = generate_moves(board);
         let mut best_mv = moves.trailing_zeros() as u8;
@@ -150,36 +141,32 @@ impl Search {
             moves &= moves - 1;
 
             let mut child = board.clone();
-            let delta = child.make(mv); // Get delta — child.ply is now board.ply + 1
+            let delta = child.make(mv);
 
             let mut child_acc = root_acc;
             child_acc.apply_delta(net, &delta);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc);
-            // println!("score {}", score);
             if score > best_score {
                 best_score = score;
                 best_mv = mv;
             }
         }
 
-        best_mv as u8
+        best_mv
     }
 
     pub fn think_training(&mut self, board: &TicTacToe, depth: i32, net: &Network) -> u8 {
         let temperature = if board.ply < 2 {
-            1.0 // opening: explore freely
+            1.0
         } else if board.ply < 10 {
-            0.5 // midgame: some noise
+            0.5
         } else {
-            0.2 // endgame: keep some exploration
+            0.2
         };
-
         self.think_with_noise(board, depth, net, temperature)
     }
 
-    /// Like `think_training` but also returns the best search score for the position.
-    /// The score is from the side-to-move's perspective, in [0.0, 1.0].
     pub fn think_training_scored(
         &mut self,
         board: &TicTacToe,
@@ -193,7 +180,6 @@ impl Search {
         } else {
             0.2
         };
-
         self.think_with_noise_scored(board, depth, net, temperature)
     }
 
@@ -202,14 +188,12 @@ impl Search {
         board: &TicTacToe,
         depth: i32,
         net: &Network,
-        temperature: f32, // 0.0 = deterministic, 1.0 = proportional, >1.0 = more random
+        temperature: f32,
     ) -> u8 {
-        self.think_with_noise_scored(board, depth, net, temperature).0
+        self.think_with_noise_scored(board, depth, net, temperature)
+            .0
     }
 
-    /// Core implementation: returns (chosen_move, best_score).
-    /// `best_score` is the highest score among all moves (the deterministic best),
-    /// regardless of which move was actually chosen via temperature sampling.
     fn think_with_noise_scored(
         &mut self,
         board: &TicTacToe,
@@ -217,8 +201,7 @@ impl Search {
         net: &Network,
         temperature: f32,
     ) -> (u8, f32) {
-        // Always initialize the root accumulator from the actual board state.
-        let root_acc = Accumulator::new(net, board);
+        let root_acc = DualAccumulator::new(net, board);
 
         let mut moves = generate_moves(board);
         let mut move_scores = [(0u8, 0f32); 81];
@@ -229,7 +212,7 @@ impl Search {
             moves &= moves - 1;
 
             let mut child = board.clone();
-            let delta = child.make(mv); // Get delta — child.ply is now board.ply + 1
+            let delta = child.make(mv);
 
             let mut child_acc = root_acc;
             child_acc.apply_delta(net, &delta);
@@ -239,14 +222,12 @@ impl Search {
             count += 1;
         }
 
-        // Best score is always the deterministic best — used as the training label
         let best_score = move_scores[..count]
             .iter()
             .map(|(_, s)| *s)
             .fold(f32::NEG_INFINITY, f32::max);
 
         if temperature == 0.0 {
-            // deterministic — best move
             let best_mv = move_scores[..count]
                 .iter()
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
@@ -255,7 +236,7 @@ impl Search {
             return (best_mv, best_score);
         }
 
-        // softmax sampling
+        // Softmax temperature sampling
         let weights: Vec<f32> = move_scores[..count]
             .iter()
             .map(|(_, s)| ((s - best_score) / temperature).exp())

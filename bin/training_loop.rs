@@ -53,10 +53,7 @@ fn cleanup_old_generations(max_bytes: u64) -> usize {
         let weights_path = format!("databin/gen{}_weights.bin", gen_num);
         let _ = fs::remove_file(&data_path);
         let _ = fs::remove_file(&weights_path);
-        println!(
-            "{}",
-            format!("cleaned up gen{gen_num} (disk cap)").yellow()
-        );
+        println!("{}", format!("cleaned up gen{gen_num} (disk cap)").yellow());
         removed += 1;
     }
     removed
@@ -84,11 +81,34 @@ fn main() -> anyhow::Result<()> {
 
         let challenger = format!("databin/gen{}_weights.bin", gen_count);
 
-        println!("evaluating...");
-        let elo = tournament(&best_net, &challenger, 500);
-        println!("gen{gen_count} vs baseline: {elo:+.1} Elo");
+        println!("evaluating against pool...");
+        let mut total_elo = 0.0;
 
-        if elo > 0.0 {
+        let mut pool = vec![best_gen];
+        if best_gen >= 1 {
+            pool.push(best_gen.saturating_sub(1));
+        }
+        if best_gen >= 3 {
+            pool.push(best_gen / 2);
+        }
+        if best_gen >= 5 {
+            pool.push(0);
+        }
+        pool.sort_unstable();
+        pool.dedup();
+        pool.retain(|&g| fs::metadata(format!("databin/gen{}_weights.bin", g)).is_ok());
+
+        for &past_gen in &pool {
+            let past_net = format!("databin/gen{}_weights.bin", past_gen);
+            let elo = tournament(&past_net, &challenger, 400);
+            println!("gen{gen_count} vs gen{past_gen}: {elo:+.1} Elo");
+            total_elo += elo;
+        }
+
+        let avg_elo = total_elo / pool.len() as f32;
+        println!("gen{gen_count} vs pool average: {avg_elo:+.1} Elo");
+
+        if avg_elo > 0.0 {
             println!(
                 "{}",
                 format!("promoting gen{gen_count} as new best").green()
@@ -96,11 +116,9 @@ fn main() -> anyhow::Result<()> {
             best_net = challenger;
             best_gen = gen_count;
             upgrade_count += 1;
-            if upgrade_count % 5 == 0 {
-                println!("{}", "Checking if net is training well:".cyan());
-                let elo = tournament(&best_net, &fixed_net, 500);
-                println!("gen{gen_count} vs fixed_net: {elo:+.1} Elo");
-            }
+            println!("{}", "Checking if net is training well:".cyan());
+            let elo = tournament(&best_net, &fixed_net, 500);
+            println!("gen{gen_count} vs fixed_net: {elo:+.1} Elo");
         } else {
             println!(
                 "{}",

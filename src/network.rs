@@ -6,22 +6,19 @@ use crate::{
     core::{MoveDelta, Symbol, TicTacToe},
 };
 
-fn feature_offset(symbol: Symbol, cross_off: u32, circle_off: u32) -> u32 {
-    match symbol {
-        Symbol::Cross => cross_off,
-        Symbol::Circle => circle_off,
-    }
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Network weights
+// ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct Network {
-    w0: [[f32; FEATURES_COUNT]; 128],
-    b0: [f32; 128],
-    w1: [[f32; 128]; 64],
-    b1: [f32; 64],
-    w2: [[f32; 64]; 1],
-    b2: [f32; 1],
+    pub w0: [[f32; FEATURES_COUNT]; 128],
+    pub b0: [f32; 128],
+    pub w1: [[f32; 128]; 64],
+    pub b1: [f32; 64],
+    pub w2: [[f32; 64]; 1],
+    pub b2: [f32; 1],
 }
 
 #[inline(always)]
@@ -38,15 +35,15 @@ fn sigmoid(x: f32) -> f32 {
 impl Network {
     pub fn load(path: String) -> Box<Self> {
         let bytes = fs::read(path).expect("failed to read weights file");
-        let network = Box::new(*try_from_bytes::<Network>(&bytes).expect(&format!(
+        Box::new(*try_from_bytes::<Network>(&bytes).expect(&format!(
             "invalid alignment or size:\nsize of bytes: {}\n",
             std::mem::size_of_val(&bytes)
-        )));
-
-        network
+        )))
     }
 
-    pub fn forward(&self, acc: &Accumulator) -> f32 {
+    /// Forward pass.  `acc` is a *single-perspective* hidden layer – i.e. the
+    /// caller must already have selected the STM half of a DualAccumulator.
+    pub fn forward(&self, acc: &[f32; 128]) -> f32 {
         #[cfg(target_arch = "x86_64")]
         {
             if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
@@ -56,11 +53,10 @@ impl Network {
         self.forward_scalar(acc)
     }
 
-    /// Scalar fallback for non-AVX2 CPUs.
-    fn forward_scalar(&self, acc: &Accumulator) -> f32 {
+    fn forward_scalar(&self, acc: &[f32; 128]) -> f32 {
         let mut screlu_input = [0f32; 128];
         for j in 0..128 {
-            screlu_input[j] = screlu(acc.0[j]);
+            screlu_input[j] = screlu(acc[j]);
         }
 
         let mut h1 = [0f32; 64];
@@ -80,21 +76,16 @@ impl Network {
         sigmoid(out)
     }
 
-    /// AVX2 + FMA SIMD forward pass.
-    /// Layer 1 (the hot loop): 64 neurons × 128 inputs = 8192 multiply-adds,
-    /// done 8-wide with 4-way unrolling → 256 FMA instructions.
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2,fma")]
-    unsafe fn forward_avx2(&self, acc: &Accumulator) -> f32 {
+    unsafe fn forward_avx2(&self, acc: &[f32; 128]) -> f32 {
         use std::arch::x86_64::*;
 
         let zero = _mm256_setzero_ps();
         let one = _mm256_set1_ps(1.0);
 
-        // ── Precompute screlu for all 128 accumulator values ──────────
         let mut screlu_buf = [0f32; 128];
-
-        let stm_ptr = acc.0.as_ptr();
+        let stm_ptr = acc.as_ptr();
         let out_ptr = screlu_buf.as_mut_ptr();
         for k in (0..128).step_by(8) {
             let x = _mm256_loadu_ps(stm_ptr.add(k));
@@ -102,19 +93,15 @@ impl Network {
             _mm256_storeu_ps(out_ptr.add(k), _mm256_mul_ps(clamped, clamped));
         }
 
-        // ── Layer 1: 64 neurons, 128 inputs, 4-way unrolled FMA ──────
         let mut h1 = [0f32; 64];
         let s_ptr = screlu_buf.as_ptr();
 
         for i in 0..64 {
             let w_ptr = self.w1[i].as_ptr();
-
             let mut a0 = _mm256_setzero_ps();
             let mut a1 = _mm256_setzero_ps();
             let mut a2 = _mm256_setzero_ps();
             let mut a3 = _mm256_setzero_ps();
-
-            // 128 / 32 = 4 iterations
             let mut j = 0;
             while j < 128 {
                 a0 = _mm256_fmadd_ps(
@@ -139,30 +126,23 @@ impl Network {
                 );
                 j += 32;
             }
-
-            // reduce 4 accumulators → scalar
             a0 = _mm256_add_ps(a0, a1);
             a2 = _mm256_add_ps(a2, a3);
             a0 = _mm256_add_ps(a0, a2);
-
             let hi = _mm256_extractf128_ps(a0, 1);
             let lo = _mm256_castps256_ps128(a0);
             let s128 = _mm_add_ps(lo, hi);
             let s64 = _mm_add_ps(s128, _mm_movehl_ps(s128, s128));
             let s32 = _mm_add_ss(s64, _mm_shuffle_ps(s64, s64, 1));
-
             let dot = _mm_cvtss_f32(s32) + self.b1[i];
             let c = dot.clamp(0.0, 1.0);
             h1[i] = c * c;
         }
 
-        // ── Layer 2: 64 → 1 ─────────────────────────────────────────
         let h_ptr = h1.as_ptr();
         let w2_ptr = self.w2[0].as_ptr();
-
         let mut a0 = _mm256_setzero_ps();
         let mut a1 = _mm256_setzero_ps();
-        // 64 / 16 = 4 iterations
         let mut j = 0;
         while j < 64 {
             a0 = _mm256_fmadd_ps(
@@ -178,66 +158,236 @@ impl Network {
             j += 16;
         }
         a0 = _mm256_add_ps(a0, a1);
-
         let hi = _mm256_extractf128_ps(a0, 1);
         let lo = _mm256_castps256_ps128(a0);
         let s128 = _mm_add_ps(lo, hi);
         let s64 = _mm_add_ps(s128, _mm_movehl_ps(s128, s128));
         let s32 = _mm_add_ss(s64, _mm_shuffle_ps(s64, s64, 1));
-
         sigmoid(_mm_cvtss_f32(s32) + self.b2[0])
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Low-level helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[inline(always)]
+fn add_feature(acc: &mut [f32; 128], net: &Network, f: usize) {
+    for i in 0..128 {
+        acc[i] += net.w0[i][f];
+    }
+}
+
+#[inline(always)]
+fn sub_feature(acc: &mut [f32; 128], net: &Network, f: usize) {
+    for i in 0..128 {
+        acc[i] -= net.w0[i][f];
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DualAccumulator
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// FIX B: Dual-perspective NNUE accumulator (the "Stockfish pattern").
+///
+/// `acc[0]` is kept from Cross's point of view (Cross = side to move).
+/// `acc[1]` is kept from Circle's point of view (Circle = side to move).
+///
+/// When a piece is played by Cross:
+///   – acc[0] sees it as a "my piece"      → STM   feature [sq]
+///   – acc[1] sees it as an "opponent piece" → NSTM feature [81 + sq]
+///
+/// When a piece is played by Circle:
+///   – acc[1] sees it as a "my piece"      → STM   feature [sq]
+///   – acc[0] sees it as an "opponent piece" → NSTM feature [81 + sq]
+///
+/// Focus and all_clear features are symmetric: updated identically in both.
+///
+/// At eval time, `stm()` returns the accumulator half for whichever side is
+/// to move, so the network always receives a consistent STM-relative input.
+#[derive(Debug, Clone, Copy)]
+pub struct DualAccumulator {
+    /// [0] = Cross-as-STM half, [1] = Circle-as-STM half
+    pub acc: [[f32; 128]; 2],
+}
+
+impl DualAccumulator {
+    /// Build both halves from scratch for `board`'s current position.
+    pub fn new(net: &Network, board: &TicTacToe) -> Self {
+        // Recover absolute (physical) piece ownership
+        let (cross_bb, circle_bb, cross_clear, circle_clear) = match board.turn as i32 {
+            1 => (
+                board.side_bitboard ^ board.bitboard, // Cross STM → STM pieces = Cross
+                board.side_bitboard,
+                board.side_clear ^ board.all_clear as u16,
+                board.side_clear,
+            ),
+            -1 => (
+                board.side_bitboard,
+                board.side_bitboard ^ board.bitboard, // Circle STM → STM pieces = Circle
+                board.side_clear,
+                board.side_clear ^ board.all_clear as u16,
+            ),
+            _ => unreachable!(),
+        };
+
+        let mut da = DualAccumulator { acc: [net.b0; 2] };
+
+        // Build acc[0]  (Cross = my, Circle = opp)
+        // Build acc[1]  (Circle = my, Cross = opp)
+        for i in 0..81 {
+            if (cross_bb >> i) & 1 != 0 {
+                add_feature(&mut da.acc[0], net, i); // Cross: my piece in acc[0]
+                add_feature(&mut da.acc[1], net, 81 + i); // Cross: opp piece in acc[1]
+            }
+            if (circle_bb >> i) & 1 != 0 {
+                add_feature(&mut da.acc[0], net, 81 + i); // Circle: opp piece in acc[0]
+                add_feature(&mut da.acc[1], net, i); // Circle: my piece in acc[1]
+            }
+        }
+
+        // Cleared meta-board (Cross)
+        for i in 0..9 {
+            if (cross_clear >> i) & 1 != 0 {
+                add_feature(&mut da.acc[0], net, 162 + i); // my clear for acc[0]
+                add_feature(&mut da.acc[1], net, 171 + i); // opp clear for acc[1]
+            }
+        }
+        // Cleared meta-board (Circle)
+        for i in 0..9 {
+            if (circle_clear >> i) & 1 != 0 {
+                add_feature(&mut da.acc[0], net, 171 + i); // opp clear for acc[0]
+                add_feature(&mut da.acc[1], net, 162 + i); // my clear for acc[1]
+            }
+        }
+
+        // all_clear (symmetric)
+        for i in 0..9 {
+            if (board.all_clear >> i) & 1 != 0 {
+                add_feature(&mut da.acc[0], net, 180 + i);
+                add_feature(&mut da.acc[1], net, 180 + i);
+            }
+        }
+
+        // Focus (symmetric)
+        let focus_feat = match board.current_focus {
+            Some(f) => 189 + f as usize,
+            None => 198,
+        };
+        add_feature(&mut da.acc[0], net, focus_feat);
+        add_feature(&mut da.acc[1], net, focus_feat);
+
+        da
+    }
+
+    /// Return the accumulator half for whichever side is to move.
+    pub fn stm(&self, turn: Symbol) -> &[f32; 128] {
+        match turn {
+            Symbol::Cross => &self.acc[0],
+            Symbol::Circle => &self.acc[1],
+        }
+    }
+
+    /// Incrementally update both halves after a move described by `delta`.
+    ///
+    /// FIX B fixes three bugs from the original single-accumulator design:
+    ///   1. Perspective-flip: each half updates with the correct STM/NSTM sign.
+    ///   2. Subtraction: old_focus is properly removed before new_focus is added.
+    ///   3. Double trailing_zeros: cleared_board is already an index 0-8,
+    ///      not a bitboard, so we use it directly without trailing_zeros().
+    pub fn apply_delta(&mut self, net: &Network, delta: &MoveDelta) {
+        let sq = delta.square as usize;
+
+        // ── 1. Piece placement ────────────────────────────────────────────────
+        match delta.turn {
+            Symbol::Cross => {
+                // Cross's piece: "my piece" (STM feature 0..81) in acc[0],
+                //                "opp piece" (NSTM feature 81..162) in acc[1]
+                add_feature(&mut self.acc[0], net, sq);
+                add_feature(&mut self.acc[1], net, 81 + sq);
+            }
+            Symbol::Circle => {
+                // Circle's piece: "my piece" in acc[1], "opp piece" in acc[0]
+                add_feature(&mut self.acc[1], net, sq);
+                add_feature(&mut self.acc[0], net, 81 + sq);
+            }
+        }
+
+        // ── 2. Cleared sub-board ─────────────────────────────────────────────
+        if let Some(b) = delta.cleared_board {
+            let b = b as usize;
+            // FIX B-3: b is already an index (0-8); do NOT call trailing_zeros() on it.
+            match delta.turn {
+                Symbol::Cross => {
+                    // Cross cleared it: STM-clear (162+b) for acc[0], NSTM-clear (171+b) for acc[1]
+                    add_feature(&mut self.acc[0], net, 162 + b);
+                    add_feature(&mut self.acc[1], net, 171 + b);
+                }
+                Symbol::Circle => {
+                    add_feature(&mut self.acc[1], net, 162 + b);
+                    add_feature(&mut self.acc[0], net, 171 + b);
+                }
+            }
+            // all_clear is symmetric
+            add_feature(&mut self.acc[0], net, 180 + b);
+            add_feature(&mut self.acc[1], net, 180 + b);
+        }
+
+        // ── 3. Focus change (symmetric across both halves) ───────────────────
+        // FIX B-2: subtract the old focus BEFORE adding the new one.
+        let old_feat = match delta.old_focus {
+            Some(f) => 189 + f as usize,
+            None => 198, // free-choice flag
+        };
+        let new_feat = match delta.new_focus {
+            Some(f) => 189 + f as usize,
+            None => 198,
+        };
+        sub_feature(&mut self.acc[0], net, old_feat);
+        sub_feature(&mut self.acc[1], net, old_feat);
+        add_feature(&mut self.acc[0], net, new_feat);
+        add_feature(&mut self.acc[1], net, new_feat);
+    }
+}
+
+impl Default for DualAccumulator {
+    fn default() -> Self {
+        Self {
+            acc: [[0.0; 128]; 2],
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Legacy single-perspective Accumulator (kept for test ergonomics)
+// ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Accumulator(pub [f32; 128]);
 
 impl Accumulator {
     pub fn new(net: &Network, board: &TicTacToe) -> Self {
-        // stm: features from current player's perspective
         let stm_features = board.to_features();
-
-        let mut stm_acc = net.b0;
-
+        let mut acc = net.b0;
         for i in 0..FEATURES_COUNT {
             if stm_features[i] != 0.0 {
                 for j in 0..128 {
-                    stm_acc[j] += net.w0[j][i];
+                    acc[j] += net.w0[j][i];
                 }
             }
         }
-
-        Accumulator(stm_acc)
+        Accumulator(acc)
     }
 
     pub fn add_features(&mut self, net: &Network, features: &[usize]) {
-        for i in 0..128 {
-            for &f in features {
-                self.0[i] += net.w0[i][f];
-            }
+        for &f in features {
+            add_feature(&mut self.0, net, f);
         }
     }
 
-    pub fn sub_feature(&mut self, net: &Network, feature: usize) {
-        for i in 0..128 {
-            self.0[i] -= net.w0[i][feature];
-        }
-    }
-
-    pub fn apply_delta(&mut self, net: &Network, delta: &MoveDelta) {
-        let f = (delta.square as u32 + feature_offset(delta.turn, 0, 81)) as usize;
-        self.add_features(net, &[f]);
-
-        if let Some(new) = delta.cleared_board {
-            let f1 = (new as u32 + feature_offset(delta.turn, 162, 171)) as usize;
-            let f2 = 180 + new.trailing_zeros() as usize;
-            self.add_features(net, &[f1, f2]);
-        }
-
-        if let Some(new) = delta.new_focus {
-            let idx = 189 + new as usize;
-            self.add_features(net, &[idx]);
-        }
+    pub fn sub_feature_single(&mut self, net: &Network, feature: usize) {
+        sub_feature(&mut self.0, net, feature);
     }
 }
 

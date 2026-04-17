@@ -1,6 +1,6 @@
 use crate::{
-    core::TicTacToe, movegen::generate_random_legal_move, network::Network, search::Search,
-    train::Sample,
+    constants::TRAINING_DEPTH, core::TicTacToe, movegen::generate_random_legal_move,
+    network::Network, search::Search, train::Sample,
 };
 
 pub fn start_self_game() {
@@ -66,16 +66,28 @@ pub fn start_self_game_with_net(net: &Network) -> Vec<Sample> {
     while !game.check_win() && !game.is_full() {
         let features = game.to_features();
 
-        // Use search evaluation as the training target (continuous score)
-        // instead of final game outcome (0/0.5/1)
-        let (move_square, score) = search.think_training_scored(&game, 6, &net);
+        let move_square = search.think_training(&game, TRAINING_DEPTH, &net);
 
         samples.push(Sample {
             features,
-            outcome: score,
+            outcome: 0.0,
         });
 
         game.make(move_square);
+    }
+
+    let outcome = match game.check_win() {
+        true => 1.0,
+        false => 0.5,
+    };
+
+    let n = samples.len();
+    for (i, s) in samples.iter_mut().enumerate() {
+        s.outcome = if (n - 1 - i) % 2 == 0 {
+            outcome
+        } else {
+            1.0 - outcome
+        };
     }
 
     samples

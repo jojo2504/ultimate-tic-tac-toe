@@ -4,10 +4,10 @@ use std::io::{BufWriter, Write};
 use bincode::Encode;
 
 use crate::{
-    constants::FEATURES_COUNT,
+    constants::{FEATURES_COUNT, TRAINING_DEPTH},
     core::{Result, TicTacToe},
     game::{random_game, start_self_game_with_net},
-    network::Network,
+    network::{DualAccumulator, Network},
     search::Search,
 };
 
@@ -32,23 +32,12 @@ pub fn generate_first_databin(gen_count: i32) -> anyhow::Result<()> {
         all_samples.extend(samples);
     }
 
-    let file = std::fs::File::create(format!("databin/gen{}_data.bin", gen_count))?;
-    let mut writer = BufWriter::new(file);
-
-    for s in &all_samples {
-        for f in &s.features {
-            writer.write_all(&f.to_le_bytes())?;
-        }
-        writer.write_all(&s.outcome.to_le_bytes())?;
-    }
-    writer.flush()?;
-    Ok(())
+    flush_samples(&all_samples, gen_count)
 }
 
 pub fn generate_iterative_databin(gen_count: i32, best_gen: i32) -> anyhow::Result<()> {
     let mut all_samples: Vec<Sample> = vec![];
     let net = Network::load(format!("databin/gen{}_weights.bin", best_gen));
-    // let mut search = Search::new();
     let counter = std::sync::atomic::AtomicUsize::new(0);
     let games_samples: Vec<Vec<Sample>> = (0..1000)
         .into_par_iter()
@@ -66,10 +55,13 @@ pub fn generate_iterative_databin(gen_count: i32, best_gen: i32) -> anyhow::Resu
         all_samples.extend(samples);
     }
 
+    flush_samples(&all_samples, gen_count)
+}
+
+fn flush_samples(samples: &[Sample], gen_count: i32) -> anyhow::Result<()> {
     let file = std::fs::File::create(format!("databin/gen{}_data.bin", gen_count))?;
     let mut writer = BufWriter::new(file);
-
-    for s in &all_samples {
+    for s in samples {
         for f in &s.features {
             writer.write_all(&f.to_le_bytes())?;
         }
@@ -90,45 +82,39 @@ pub fn tournament(base_net_path: &str, challenger_net_path: &str, num_games: u32
             let mut challenger_search = Search::new();
             let mut base_search = Search::new();
 
-            // alternate colors — challenger is Cross (first) on even games
             let challenger_is_cross = game_index % 2 == 0;
 
+            // Initialise accumulator stacks for both engines from the root position
+            challenger_search.acc[0] = DualAccumulator::new(&challenger_net, &game);
+            base_search.acc[0] = DualAccumulator::new(&base_net, &game);
+
             while !game.check_win() && !game.is_full() {
-                // Cross always moves on even plies, Circle on odd plies
                 let cross_to_move = game.ply % 2 == 0;
                 let challenger_to_move = cross_to_move == challenger_is_cross;
 
                 if challenger_to_move {
-                    let mv = challenger_search.think_training(&game, 6, &challenger_net);
+                    let mv =
+                        challenger_search.think_training(&game, TRAINING_DEPTH, &challenger_net);
                     let old_ply = game.ply;
                     let delta = game.make(mv);
-                    // Copy old-ply acc to new ply, then apply delta.
                     challenger_search.acc[game.ply] = challenger_search.acc[old_ply];
                     challenger_search.acc[game.ply].apply_delta(&challenger_net, &delta);
                 } else {
-                    let mv = base_search.think_training(&game, 6, &base_net);
+                    let mv = base_search.think_training(&game, TRAINING_DEPTH, &base_net);
                     let old_ply = game.ply;
                     let delta = game.make(mv);
                     base_search.acc[game.ply] = base_search.acc[old_ply];
                     base_search.acc[game.ply].apply_delta(&base_net, &delta);
-                };
-
-                // println!("{}", game);
+                }
             }
 
             match game.result() {
-                Result::Draw => {
-                    // println!("game {}/{}: Draw", game_index + 1, num_games);
-                    (0, 1, 0)
-                }
+                Result::Draw => (0, 1, 0),
                 Result::Win => {
-                    // winner = player who just moved = was on ply (game.ply - 1)
                     let winner_was_cross = (game.ply - 1) % 2 == 0;
                     if winner_was_cross == challenger_is_cross {
-                        // println!("game {}/{}: Challenger wins", game_index + 1, num_games);
                         (1, 0, 0)
                     } else {
-                        // println!("game {}/{}: Baseline wins", game_index + 1, num_games);
                         (0, 0, 1)
                     }
                 }
@@ -137,10 +123,7 @@ pub fn tournament(base_net_path: &str, challenger_net_path: &str, num_games: u32
         })
         .collect();
 
-    let mut wins = 0u32;
-    let mut draws = 0u32;
-    let mut losses = 0u32;
-
+    let (mut wins, mut draws, mut losses) = (0u32, 0u32, 0u32);
     for (w, d, l) in results {
         wins += w;
         draws += d;
