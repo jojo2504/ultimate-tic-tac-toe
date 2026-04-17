@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
 use crate::{
     core::{Result, TicTacToe},
     movegen::generate_moves,
@@ -22,6 +24,7 @@ pub struct TTEntry {
     value: f32,
 }
 
+#[derive(Clone)]
 pub struct Search {
     tt: HashMap<u128, TTEntry>,
     /// External accumulator stack for caller-side incremental updates
@@ -131,27 +134,41 @@ impl Search {
 
     pub fn think(&mut self, board: &TicTacToe, depth: i32, net: &Network) -> u8 {
         let root_acc = DualAccumulator::new(net, board);
-
         let mut moves = generate_moves(board);
-        let mut best_mv = moves.trailing_zeros() as u8;
-        let mut best_score = f32::NEG_INFINITY;
-
-        while moves != 0 {
-            let mv: u8 = moves.trailing_zeros() as u8;
-            moves &= moves - 1;
-
-            let mut child = board.clone();
-            let delta = child.make(mv);
-
-            let mut child_acc = root_acc;
-            child_acc.apply_delta(net, &delta);
-
-            let score = 1.0 - self.negamax(&child, depth - 1, -10.0, 10.0, net, child_acc);
-            if score > best_score {
-                best_score = score;
-                best_mv = mv;
+        let move_bit: Vec<u8> = {
+            let mut temp = Vec::new();
+            while moves != 0 {
+                let mv: u8 = moves.trailing_zeros() as u8;
+                temp.push(mv);
+                moves &= moves - 1;
             }
-        }
+            temp
+        };
+
+        let (_, best_mv) = move_bit
+            .par_iter()
+            .map(|&mv| {
+                let mut child = board.clone();
+                let delta = child.make(mv);
+
+                let mut child_acc = root_acc;
+                child_acc.apply_delta(net, &delta);
+
+                let mut local_self = self.clone();
+                let score =
+                    1.0 - local_self.negamax(&child, depth - 1, -10.0, 10.0, net, child_acc);
+                (score, mv)
+            })
+            .reduce(
+                || (f32::NEG_INFINITY, 0),
+                |(best_score, best_mv), (score, mv)| {
+                    if score > best_score {
+                        (score, mv)
+                    } else {
+                        (best_score, best_mv)
+                    }
+                },
+            );
 
         best_mv
     }
