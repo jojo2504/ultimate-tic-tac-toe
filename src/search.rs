@@ -155,8 +155,7 @@ impl Search {
                 child_acc.apply_delta(net, &delta);
 
                 let mut local_self = self.clone();
-                let score =
-                    1.0 - local_self.negamax(&child, depth - 1, -10.0, 10.0, net, child_acc);
+                let score = 1.0 - local_self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc);
                 (score, mv)
             })
             .reduce(
@@ -234,7 +233,7 @@ impl Search {
             let mut child_acc = root_acc;
             child_acc.apply_delta(net, &delta);
 
-            let score = 1.0 - self.negamax(&child, depth - 1, -10.0, 10.0, net, child_acc);
+            let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc);
             move_scores[count] = (mv, score);
             count += 1;
         }

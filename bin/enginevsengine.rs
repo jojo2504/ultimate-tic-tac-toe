@@ -1,8 +1,8 @@
 use ultimate_tic_tac_toe::{core::TicTacToe, network::Network, search::Search};
 
 fn main() {
-    let engine1_path = "databin/gen140_weights.bin";
-    let engine2_path = "databin/gen3_weights.bin";
+    let engine1_path = "databin/gen0_weights.bin";
+    let engine2_path = "databin/gen40_weights.bin";
 
     println!("Loading Engine 1 (Cross): {}", engine1_path);
     let net1 = Network::load(engine1_path.to_string());
@@ -14,7 +14,7 @@ fn main() {
     let mut search1 = Search::new();
     let mut search2 = Search::new();
 
-    let depth = 8;
+    let depth = 9;
 
     println!("Starting game at depth {}...", depth);
     println!("{}", board);
