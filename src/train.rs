@@ -99,14 +99,14 @@ pub fn tournament(base_net_path: &str, challenger_net_path: &str, num_games: u32
                 let challenger_to_move = cross_to_move == challenger_is_cross;
 
                 if challenger_to_move {
-                    let mv = challenger_search.think_training(&game, 4, &challenger_net);
+                    let mv = challenger_search.think_training(&game, 6, &challenger_net);
                     let old_ply = game.ply;
                     let delta = game.make(mv);
                     // Copy old-ply acc to new ply, then apply delta.
                     challenger_search.acc[game.ply] = challenger_search.acc[old_ply];
                     challenger_search.acc[game.ply].apply_delta(&challenger_net, &delta);
                 } else {
-                    let mv = base_search.think_training(&game, 4, &base_net);
+                    let mv = base_search.think_training(&game, 6, &base_net);
                     let old_ply = game.ply;
                     let delta = game.make(mv);
                     base_search.acc[game.ply] = base_search.acc[old_ply];

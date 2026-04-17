@@ -23,7 +23,7 @@ LEARNING_RATE = 0.001
 # Training-window config:
 #   GEN_WINDOW = N  → use the last N generations (e.g. 5)
 #   GEN_WINDOW = 0  → use ALL available generations
-GEN_WINDOW = 5
+GEN_WINDOW = 0  # use ALL available generations
 
 # Weight of the newest generation relative to older ones.
 # 1.0 = equal weight; 2.0 = newest sampled twice as often, etc.

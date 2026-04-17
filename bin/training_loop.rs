@@ -7,6 +7,63 @@ use colored::Colorize;
 use std::{fs, process::Command};
 use ultimate_tic_tac_toe::train::{self, tournament};
 
+/// Get the total size of the databin/ directory in bytes.
+fn databin_size_bytes() -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = fs::read_dir("databin") {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+/// Remove the oldest generation files (data + weights) to keep disk usage under the cap.
+/// Always keeps gen0 files. Returns how many generations were removed.
+fn cleanup_old_generations(max_bytes: u64) -> usize {
+    let mut removed = 0;
+    // Collect existing generation numbers (excluding gen0)
+    let mut gens: Vec<i32> = vec![];
+    if let Ok(entries) = fs::read_dir("databin") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("gen") && name.ends_with("_data.bin") {
+                if let Ok(num) = name
+                    .trim_start_matches("gen")
+                    .trim_end_matches("_data.bin")
+                    .parse::<i32>()
+                {
+                    if num > 0 {
+                        gens.push(num);
+                    }
+                }
+            }
+        }
+    }
+    gens.sort();
+
+    // Remove oldest first until we're under the cap
+    for gen_num in gens {
+        if databin_size_bytes() <= max_bytes {
+            break;
+        }
+        let data_path = format!("databin/gen{}_data.bin", gen_num);
+        let weights_path = format!("databin/gen{}_weights.bin", gen_num);
+        let _ = fs::remove_file(&data_path);
+        let _ = fs::remove_file(&weights_path);
+        println!(
+            "{}",
+            format!("cleaned up gen{gen_num} (disk cap)").yellow()
+        );
+        removed += 1;
+    }
+    removed
+}
+
+const MAX_DATABIN_BYTES: u64 = 10 * 1024 * 1024 * 1024; // 10 GB
+
 fn main() -> anyhow::Result<()> {
     let mut gen_count = 1;
     let mut best_gen = 0;
@@ -28,7 +85,7 @@ fn main() -> anyhow::Result<()> {
         let challenger = format!("databin/gen{}_weights.bin", gen_count);
 
         println!("evaluating...");
-        let elo = tournament(&best_net, &challenger, 200);
+        let elo = tournament(&best_net, &challenger, 500);
         println!("gen{gen_count} vs baseline: {elo:+.1} Elo");
 
         if elo > 0.0 {
@@ -41,7 +98,7 @@ fn main() -> anyhow::Result<()> {
             upgrade_count += 1;
             if upgrade_count % 5 == 0 {
                 println!("{}", "Checking if net is training well:".cyan());
-                let elo = tournament(&best_net, &fixed_net, 200);
+                let elo = tournament(&best_net, &fixed_net, 500);
                 println!("gen{gen_count} vs fixed_net: {elo:+.1} Elo");
             }
         } else {
@@ -51,10 +108,14 @@ fn main() -> anyhow::Result<()> {
             );
         }
 
-        // remove old databin and weights and keep the gen 0
-        if gen_count > 6 {
-            fs::remove_file(format!("databin/gen{}_data.bin", gen_count - 6))?;
-            fs::remove_file(format!("databin/gen{}_weights.bin", gen_count - 6))?;
+        // Smart disk cleanup: remove oldest generations when over 10 GB cap
+        let removed = cleanup_old_generations(MAX_DATABIN_BYTES);
+        if removed > 0 {
+            let size_mb = databin_size_bytes() as f64 / (1024.0 * 1024.0);
+            println!(
+                "{}",
+                format!("removed {removed} old gen(s), databin now {size_mb:.0} MB").yellow()
+            );
         }
 
         gen_count += 1;

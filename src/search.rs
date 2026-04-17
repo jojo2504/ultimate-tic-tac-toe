@@ -172,10 +172,29 @@ impl Search {
         } else if board.ply < 10 {
             0.5 // midgame: some noise
         } else {
-            0.0 // endgame: play best move
+            0.2 // endgame: keep some exploration
         };
 
         self.think_with_noise(board, depth, net, temperature)
+    }
+
+    /// Like `think_training` but also returns the best search score for the position.
+    /// The score is from the side-to-move's perspective, in [0.0, 1.0].
+    pub fn think_training_scored(
+        &mut self,
+        board: &TicTacToe,
+        depth: i32,
+        net: &Network,
+    ) -> (u8, f32) {
+        let temperature = if board.ply < 2 {
+            1.0
+        } else if board.ply < 10 {
+            0.5
+        } else {
+            0.2
+        };
+
+        self.think_with_noise_scored(board, depth, net, temperature)
     }
 
     pub fn think_with_noise(
@@ -185,6 +204,19 @@ impl Search {
         net: &Network,
         temperature: f32, // 0.0 = deterministic, 1.0 = proportional, >1.0 = more random
     ) -> u8 {
+        self.think_with_noise_scored(board, depth, net, temperature).0
+    }
+
+    /// Core implementation: returns (chosen_move, best_score).
+    /// `best_score` is the highest score among all moves (the deterministic best),
+    /// regardless of which move was actually chosen via temperature sampling.
+    fn think_with_noise_scored(
+        &mut self,
+        board: &TicTacToe,
+        depth: i32,
+        net: &Network,
+        temperature: f32,
+    ) -> (u8, f32) {
         // Always initialize the root accumulator from the actual board state.
         let root_acc = Accumulator::new(net, board);
 
@@ -207,24 +239,26 @@ impl Search {
             count += 1;
         }
 
+        // Best score is always the deterministic best — used as the training label
+        let best_score = move_scores[..count]
+            .iter()
+            .map(|(_, s)| *s)
+            .fold(f32::NEG_INFINITY, f32::max);
+
         if temperature == 0.0 {
             // deterministic — best move
-            return move_scores[..count]
+            let best_mv = move_scores[..count]
                 .iter()
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
                 .unwrap()
                 .0;
+            return (best_mv, best_score);
         }
 
         // softmax sampling
-        let max_score = move_scores[..count]
-            .iter()
-            .map(|(_, s)| s)
-            .cloned()
-            .fold(f32::NEG_INFINITY, f32::max);
         let weights: Vec<f32> = move_scores[..count]
             .iter()
-            .map(|(_, s)| ((s - max_score) / temperature).exp())
+            .map(|(_, s)| ((s - best_score) / temperature).exp())
             .collect();
 
         let total: f32 = weights.iter().sum();
@@ -233,10 +267,10 @@ impl Search {
         for (i, w) in weights.iter().enumerate() {
             rng_val -= w;
             if rng_val <= 0.0 {
-                return move_scores[i].0;
+                return (move_scores[i].0, best_score);
             }
         }
 
-        move_scores[..count].last().unwrap().0
+        (move_scores[..count].last().unwrap().0, best_score)
     }
 }

@@ -66,37 +66,16 @@ pub fn start_self_game_with_net(net: &Network) -> Vec<Sample> {
     while !game.check_win() && !game.is_full() {
         let features = game.to_features();
 
+        // Use search evaluation as the training target (continuous score)
+        // instead of final game outcome (0/0.5/1)
+        let (move_square, score) = search.think_training_scored(&game, 6, &net);
+
         samples.push(Sample {
             features,
-            outcome: 0.0,
-        }); // outcome filled later
+            outcome: score,
+        });
 
-        let move_square = search.think_training(&mut game, 4, &net);
         game.make(move_square);
-        // println!("{}{}", game, move_square);
-        // println!(
-        //     "{:?}, {:09b}, {:09b}",
-        //     game.turn.swap(),
-        //     game.side_clear,
-        //     game.all_clear
-        // );
-    }
-
-    let outcome = match game.check_win() {
-        true => 1.0,  // last player to move won
-        false => 0.5, // draw
-    };
-
-    // println!("{:?} {}", game.turn.swap(), outcome);
-
-    let n = samples.len();
-    for (i, s) in samples.iter_mut().enumerate() {
-        // Winner moved at ply n-1; winner's positions share parity with n-1
-        s.outcome = if (n - 1 - i) % 2 == 0 {
-            outcome
-        } else {
-            1.0 - outcome
-        };
     }
 
     samples
