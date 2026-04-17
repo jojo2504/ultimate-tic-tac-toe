@@ -71,8 +71,8 @@ impl Search {
         // Terminal
         if board.is_game_over() {
             return match board.result() {
-                Result::Win => 0.0,  // opponent (last mover) won → current player lost
-                Result::Loss => 1.0, // unreachable at terminal, but consistent
+                Result::Win => 0.0 - 0.0001 * ((81 - board.ply) as f32), // opponent (last mover) won → current player lost
+                Result::Loss => 1.0 + 0.0001 * ((81 - board.ply) as f32), // unreachable at terminal, but consistent
                 Result::Draw => 0.5,
             };
         }
@@ -146,7 +146,7 @@ impl Search {
             let mut child_acc = root_acc;
             child_acc.apply_delta(net, &delta);
 
-            let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc);
+            let score = 1.0 - self.negamax(&child, depth - 1, -10.0, 10.0, net, child_acc);
             if score > best_score {
                 best_score = score;
                 best_mv = mv;
@@ -157,12 +157,12 @@ impl Search {
     }
 
     pub fn think_training(&mut self, board: &TicTacToe, depth: i32, net: &Network) -> u8 {
-        let temperature = if board.ply < 2 {
-            1.0
-        } else if board.ply < 10 {
+        let temperature = if board.ply < 6 {
             0.5
-        } else {
+        } else if board.ply < 15 {
             0.2
+        } else {
+            0.05
         };
         self.think_with_noise(board, depth, net, temperature)
     }
@@ -173,12 +173,12 @@ impl Search {
         depth: i32,
         net: &Network,
     ) -> (u8, f32) {
-        let temperature = if board.ply < 2 {
-            1.0
-        } else if board.ply < 10 {
+        let temperature = if board.ply < 6 {
             0.5
-        } else {
+        } else if board.ply < 15 {
             0.2
+        } else {
+            0.05
         };
         self.think_with_noise_scored(board, depth, net, temperature)
     }
@@ -217,7 +217,7 @@ impl Search {
             let mut child_acc = root_acc;
             child_acc.apply_delta(net, &delta);
 
-            let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc);
+            let score = 1.0 - self.negamax(&child, depth - 1, -10.0, 10.0, net, child_acc);
             move_scores[count] = (mv, score);
             count += 1;
         }

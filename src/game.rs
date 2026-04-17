@@ -1,6 +1,6 @@
 use crate::{
-    constants::TRAINING_DEPTH, core::TicTacToe, movegen::generate_random_legal_move,
-    network::Network, search::Search, train::Sample,
+    core::TicTacToe, movegen::generate_random_legal_move, network::Network, search::Search,
+    train::Sample,
 };
 
 pub fn start_self_game() {
@@ -58,7 +58,7 @@ pub fn random_game() -> Vec<Sample> {
     samples
 }
 
-pub fn start_self_game_with_net(net: &Network) -> Vec<Sample> {
+pub fn start_self_game_with_net(net: &Network, depth: i32) -> Vec<Sample> {
     let mut game = TicTacToe::new();
     let mut search = Search::new();
 
@@ -66,7 +66,7 @@ pub fn start_self_game_with_net(net: &Network) -> Vec<Sample> {
     while !game.check_win() && !game.is_full() {
         let features = game.to_features();
 
-        let move_square = search.think_training(&game, TRAINING_DEPTH, &net);
+        let move_square = search.think_training(&game, depth, &net);
 
         samples.push(Sample {
             features,

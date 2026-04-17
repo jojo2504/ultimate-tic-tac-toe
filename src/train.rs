@@ -4,7 +4,7 @@ use std::io::{BufWriter, Write};
 use bincode::Encode;
 
 use crate::{
-    constants::{FEATURES_COUNT, TRAINING_DEPTH},
+    constants::FEATURES_COUNT,
     core::{Result, TicTacToe},
     game::{random_game, start_self_game_with_net},
     network::{DualAccumulator, Network},
@@ -35,14 +35,14 @@ pub fn generate_first_databin(gen_count: i32) -> anyhow::Result<()> {
     flush_samples(&all_samples, gen_count)
 }
 
-pub fn generate_iterative_databin(gen_count: i32, best_gen: i32) -> anyhow::Result<()> {
+pub fn generate_iterative_databin(gen_count: i32, best_gen: i32, depth: i32) -> anyhow::Result<()> {
     let mut all_samples: Vec<Sample> = vec![];
     let net = Network::load(format!("databin/gen{}_weights.bin", best_gen));
     let counter = std::sync::atomic::AtomicUsize::new(0);
     let games_samples: Vec<Vec<Sample>> = (0..1000)
         .into_par_iter()
         .map(|_i| {
-            let samples = start_self_game_with_net(&net);
+            let samples = start_self_game_with_net(&net, depth);
             let count = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             if count % 100 == 0 {
                 println!("{} games completed.", count);
@@ -71,7 +71,12 @@ fn flush_samples(samples: &[Sample], gen_count: i32) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn tournament(base_net_path: &str, challenger_net_path: &str, num_games: u32) -> f32 {
+pub fn tournament(
+    base_net_path: &str,
+    challenger_net_path: &str,
+    num_games: u32,
+    depth: i32,
+) -> f32 {
     let base_net = Network::load(base_net_path.to_owned());
     let challenger_net = Network::load(challenger_net_path.to_owned());
 
@@ -93,14 +98,13 @@ pub fn tournament(base_net_path: &str, challenger_net_path: &str, num_games: u32
                 let challenger_to_move = cross_to_move == challenger_is_cross;
 
                 if challenger_to_move {
-                    let mv =
-                        challenger_search.think_training(&game, TRAINING_DEPTH, &challenger_net);
+                    let mv = challenger_search.think_training(&game, depth, &challenger_net);
                     let old_ply = game.ply;
                     let delta = game.make(mv);
                     challenger_search.acc[game.ply] = challenger_search.acc[old_ply];
                     challenger_search.acc[game.ply].apply_delta(&challenger_net, &delta);
                 } else {
-                    let mv = base_search.think_training(&game, TRAINING_DEPTH, &base_net);
+                    let mv = base_search.think_training(&game, depth, &base_net);
                     let old_ply = game.ply;
                     let delta = game.make(mv);
                     base_search.acc[game.ply] = base_search.acc[old_ply];

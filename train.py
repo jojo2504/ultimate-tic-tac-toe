@@ -100,6 +100,8 @@ def build_windowed_dataset(
 
     if window > 0:
         selected = all_gens[-window:]
+        if 0 not in selected and 0 in all_gens:
+            selected.insert(0, 0)
     else:
         selected = all_gens
 

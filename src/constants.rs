@@ -89,4 +89,4 @@ pub const FINAL_CHECKERS: [u16; 8] = [
 
 pub const FEATURES_COUNT: usize = 199;
 
-pub const TRAINING_DEPTH: i32 = 3;
+pub const TRAINING_DEPTH: i32 = 4;
