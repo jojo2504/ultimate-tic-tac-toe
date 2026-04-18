@@ -35,7 +35,7 @@ pub fn random_game() -> Vec<Sample> {
             features,
             search_score: 0.5,
             outcome: 0.0,
-            ply: game.ply,
+            ply: game.ply as f32,
         }); // outcome filled later
 
         let mv = generate_random_legal_move(&game);
@@ -81,7 +81,7 @@ pub fn start_self_game_with_net(net: &Network, depth: i32) -> Vec<Sample> {
                 features,
                 search_score: search_score.clamp(0.0, 1.0),
                 outcome: 0.0,
-                ply: game.ply,
+                ply: game.ply as f32,
             },
             ply,
         });

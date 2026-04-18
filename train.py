@@ -63,7 +63,7 @@ def load_samples(path: str):
             buckets = torch.tensor(
                 np.clip(plies * N_BUCKETS // 82, 0, N_BUCKETS - 1), dtype=torch.long
             )
-            y = 0.8 * search_scores + 0.2 * outcomes
+            y = (0.8 * search_scores + 0.2 * outcomes).squeeze(1)
 
             # ── BUG #1: validate label range ──────────────────────────
             y_min, y_max = y.min().item(), y.max().item()

@@ -16,7 +16,7 @@ pub struct Sample {
     pub features: [f32; FEATURES_COUNT],
     pub search_score: f32,
     pub outcome: f32,
-    pub ply: usize,
+    pub ply: f32,
 }
 
 pub fn generate_first_databin(gen_count: i32) -> anyhow::Result<()> {
@@ -69,6 +69,7 @@ fn flush_samples(samples: &[Sample], gen_count: i32) -> anyhow::Result<()> {
         }
         writer.write_all(&s.search_score.to_le_bytes())?;
         writer.write_all(&s.outcome.to_le_bytes())?;
+        writer.write_all(&s.ply.to_le_bytes())?;
     }
     writer.flush()?;
     Ok(())
