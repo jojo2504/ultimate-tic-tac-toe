@@ -96,18 +96,18 @@ impl Network {
         // Layer 1
         let mut h1 = [0i32; 64];
         for i in 0..64 {
-            let mut sum = self.b1[i]; // i32
+            let mut sum = self.b1[i]; // scale: QA * QB
             for j in 0..128 {
-                let a = (acc[j] as i32).clamp(0, QA);
-                sum += a * a * self.w1[i][j] as i32;
+                let a = (acc[j] as i32).clamp(0, QA); // scale: QA
+                sum += (a * a * self.w1[i][j] as i32) >> 8; // >> 8 = / QA → scale: QA * QB
             }
-            h1[i] = (sum >> 8).clamp(0, QA); // divide by QA=256, keep clamped
+            h1[i] = (sum >> 6).clamp(0, QA); // >> 6 = / QB → scale: QA
         }
 
         // Layer 2
-        let mut out = self.b2[bucket]; // i32
+        let mut out = self.b2[bucket]; // scale: QA * QB
         for i in 0..64 {
-            out += h1[i] * self.w2[bucket][i] as i32;
+            out += h1[i] * self.w2[bucket][i] as i32; // QA * QB
         }
 
         sigmoid(out as f32 / (QA * QB) as f32)
@@ -120,30 +120,34 @@ impl Network {
     unsafe fn forward_avx2(&self, acc: &[i16; 128], bucket: usize) -> f32 {
         use std::arch::x86_64::*;
 
-        // Convert i16 acc → f32, apply SCReLU
+        // Normalize acc to [0,1] and apply SCReLU
         let mut screlu_buf = [0f32; 128];
         for k in 0..128 {
             let a = (acc[k] as f32 / QA as f32).clamp(0.0, 1.0);
             screlu_buf[k] = a * a;
         }
 
-        // Convert i16 w1 → f32 once per forward (small cost)
+        // Normalize weights to true f32 scale
+        let inv_qb = 1.0 / QB as f32;
         let mut w1_f32 = [[0f32; 128]; 64];
         for i in 0..64 {
             for j in 0..128 {
-                w1_f32[i][j] = self.w1[i][j] as f32;
+                w1_f32[i][j] = self.w1[i][j] as f32 * inv_qb;
             }
         }
         let mut w2_f32 = [0f32; 64];
         for i in 0..64 {
-            w2_f32[i] = self.w2[bucket][i] as f32;
+            w2_f32[i] = self.w2[bucket][i] as f32 * inv_qb;
         }
 
         let s_ptr = screlu_buf.as_ptr();
         let mut h1 = [0f32; 64];
+
         for i in 0..64 {
             let w_ptr = w1_f32[i].as_ptr();
+            // b1 stored as QA*QB scale → normalize to f32
             let bias = self.b1[i] as f32 / (QA * QB) as f32;
+
             let mut a0 = _mm256_setzero_ps();
             let mut a1 = _mm256_setzero_ps();
             let mut a2 = _mm256_setzero_ps();
@@ -180,7 +184,7 @@ impl Network {
             let s128 = _mm_add_ps(lo, hi);
             let s64 = _mm_add_ps(s128, _mm_movehl_ps(s128, s128));
             let s32 = _mm_add_ss(s64, _mm_shuffle_ps(s64, s64, 1));
-            let dot = _mm_cvtss_f32(s32) + bias;
+            let dot = _mm_cvtss_f32(s32) + bias; // both in [0,1] scale now ✓
             let c = dot.clamp(0.0, 1.0);
             h1[i] = c * c;
         }
@@ -189,6 +193,7 @@ impl Network {
         let h_ptr = h1.as_ptr();
         let w2_ptr = w2_f32.as_ptr();
         let bias2 = self.b2[bucket] as f32 / (QA * QB) as f32;
+
         let mut a0 = _mm256_setzero_ps();
         let mut a1 = _mm256_setzero_ps();
         let mut j = 0;
@@ -211,7 +216,7 @@ impl Network {
         let s128 = _mm_add_ps(lo, hi);
         let s64 = _mm_add_ps(s128, _mm_movehl_ps(s128, s128));
         let s32 = _mm_add_ss(s64, _mm_shuffle_ps(s64, s64, 1));
-        sigmoid(_mm_cvtss_f32(s32) + bias2)
+        sigmoid(_mm_cvtss_f32(s32) + bias2) // both [0,1] scale ✓
     }
 }
 
@@ -222,14 +227,14 @@ impl Network {
 #[inline(always)]
 fn add_feature(acc: &mut [i16; 128], net: &Network, f: usize) {
     for i in 0..128 {
-        acc[i] += net.w0[i][f];
+        acc[i] = acc[i].saturating_add(net.w0[i][f]);
     }
 }
 
 #[inline(always)]
 fn sub_feature(acc: &mut [i16; 128], net: &Network, f: usize) {
     for i in 0..128 {
-        acc[i] -= net.w0[i][f];
+        acc[i] = acc[i].saturating_sub(net.w0[i][f]);
     }
 }
 

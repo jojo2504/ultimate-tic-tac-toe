@@ -63,8 +63,8 @@ fn cleanup_old_generations(current_gen: i32) -> usize {
 }
 
 fn main() -> anyhow::Result<()> {
-    let mut gen_count = 104;
-    let mut best_gen = 103;
+    let mut gen_count = 1;
+    let mut best_gen = 0;
     let mut best_net = format!("databin/gen{}_weights.bin", gen_count - 1);
 
     let mut depth = 3;
