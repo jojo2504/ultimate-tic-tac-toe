@@ -1,4 +1,4 @@
-use bytemuck::{Pod, Zeroable, checked::try_from_bytes};
+use bytemuck::{Pod, Zeroable};
 use std::fs;
 
 use crate::{
@@ -154,26 +154,28 @@ impl Network {
             let mut a3 = _mm256_setzero_ps();
             let mut j = 0;
             while j < 128 {
-                a0 = _mm256_fmadd_ps(
-                    _mm256_loadu_ps(w_ptr.add(j)),
-                    _mm256_loadu_ps(s_ptr.add(j)),
-                    a0,
-                );
-                a1 = _mm256_fmadd_ps(
-                    _mm256_loadu_ps(w_ptr.add(j + 8)),
-                    _mm256_loadu_ps(s_ptr.add(j + 8)),
-                    a1,
-                );
-                a2 = _mm256_fmadd_ps(
-                    _mm256_loadu_ps(w_ptr.add(j + 16)),
-                    _mm256_loadu_ps(s_ptr.add(j + 16)),
-                    a2,
-                );
-                a3 = _mm256_fmadd_ps(
-                    _mm256_loadu_ps(w_ptr.add(j + 24)),
-                    _mm256_loadu_ps(s_ptr.add(j + 24)),
-                    a3,
-                );
+                unsafe {
+                    a0 = _mm256_fmadd_ps(
+                        _mm256_loadu_ps(w_ptr.add(j)),
+                        _mm256_loadu_ps(s_ptr.add(j)),
+                        a0,
+                    );
+                    a1 = _mm256_fmadd_ps(
+                        _mm256_loadu_ps(w_ptr.add(j + 8)),
+                        _mm256_loadu_ps(s_ptr.add(j + 8)),
+                        a1,
+                    );
+                    a2 = _mm256_fmadd_ps(
+                        _mm256_loadu_ps(w_ptr.add(j + 16)),
+                        _mm256_loadu_ps(s_ptr.add(j + 16)),
+                        a2,
+                    );
+                    a3 = _mm256_fmadd_ps(
+                        _mm256_loadu_ps(w_ptr.add(j + 24)),
+                        _mm256_loadu_ps(s_ptr.add(j + 24)),
+                        a3,
+                    );
+                }
                 j += 32;
             }
             a0 = _mm256_add_ps(a0, a1);
@@ -198,16 +200,18 @@ impl Network {
         let mut a1 = _mm256_setzero_ps();
         let mut j = 0;
         while j < 64 {
-            a0 = _mm256_fmadd_ps(
-                _mm256_loadu_ps(w2_ptr.add(j)),
-                _mm256_loadu_ps(h_ptr.add(j)),
-                a0,
-            );
-            a1 = _mm256_fmadd_ps(
-                _mm256_loadu_ps(w2_ptr.add(j + 8)),
-                _mm256_loadu_ps(h_ptr.add(j + 8)),
-                a1,
-            );
+            unsafe {
+                a0 = _mm256_fmadd_ps(
+                    _mm256_loadu_ps(w2_ptr.add(j)),
+                    _mm256_loadu_ps(h_ptr.add(j)),
+                    a0,
+                );
+                a1 = _mm256_fmadd_ps(
+                    _mm256_loadu_ps(w2_ptr.add(j + 8)),
+                    _mm256_loadu_ps(h_ptr.add(j + 8)),
+                    a1,
+                );
+            }
             j += 16;
         }
         a0 = _mm256_add_ps(a0, a1);

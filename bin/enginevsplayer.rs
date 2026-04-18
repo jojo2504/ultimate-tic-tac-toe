@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, stdin};
+use std::io::stdin;
 
 use ultimate_tic_tac_toe::{core::TicTacToe, network::Network, search::Search};
 

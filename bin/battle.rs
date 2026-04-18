@@ -180,7 +180,7 @@ impl Battle {
 
         loop {
             let turn = self.ply_index % 2; // 0 = X, 1 = O
-            let other = 1 - turn;
+            let _other = 1 - turn;
             let last = self.last_move.expect("at least one move played");
 
             // send opponent's last square → get this engine's reply

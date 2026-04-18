@@ -45,12 +45,3 @@ fn main() {
         out.flush().unwrap();
     }
 }
-
-fn first_legal(game: &TicTacToe) -> u8 {
-    for cell in 0u8..81 {
-        if game.validate_move(cell).is_ok() {
-            return cell;
-        }
-    }
-    panic!("no legal moves");
-}
