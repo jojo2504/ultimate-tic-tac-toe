@@ -7,6 +7,8 @@ use crate::{
 };
 
 const N_BUCKETS: usize = 4;
+const QA: i32 = 256;
+const QB: i32 = 64;
 
 // Bucket by ply (call this before forward)
 pub fn get_bucket(ply: usize) -> usize {
@@ -20,18 +22,12 @@ pub fn get_bucket(ply: usize) -> usize {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct Network {
-    pub w0: [[f32; FEATURES_COUNT]; 128],
-    pub b0: [f32; 128],
-    pub w1: [[f32; 128]; 64],
-    pub b1: [f32; 64],
-    pub w2: [[f32; 64]; N_BUCKETS],
-    pub b2: [f32; N_BUCKETS],
-}
-
-#[inline(always)]
-fn screlu(x: f32) -> f32 {
-    let clamped = x.clamp(0.0, 1.0);
-    clamped * clamped
+    pub w0: [[i16; FEATURES_COUNT]; 128],
+    pub b0: [i16; 128],
+    pub w1: [[i16; 128]; 64],
+    pub b1: [i32; 64],
+    pub w2: [[i16; 64]; N_BUCKETS],
+    pub b2: [i32; N_BUCKETS],
 }
 
 #[inline(always)]
@@ -41,16 +37,52 @@ fn sigmoid(x: f32) -> f32 {
 
 impl Network {
     pub fn load(path: String) -> Box<Self> {
-        let bytes = fs::read(path).expect("failed to read weights file");
-        Box::new(*try_from_bytes::<Network>(&bytes).expect(&format!(
-            "invalid alignment or size:\nsize of bytes: {}\n",
-            std::mem::size_of_val(&bytes)
-        )))
+        let bytes = fs::read(&path).expect("failed to read weights file");
+        let floats: &[f32] = bytemuck::cast_slice(&bytes);
+        Box::new(Self::quantize(floats))
+    }
+
+    fn quantize(f: &[f32]) -> Self {
+        let mut net = Self::zeroed();
+        let mut o = 0;
+
+        for i in 0..128 {
+            for j in 0..FEATURES_COUNT {
+                net.w0[i][j] = (f[o] * QA as f32).round() as i16;
+                o += 1;
+            }
+        }
+        for i in 0..128 {
+            net.b0[i] = (f[o] * QA as f32).round() as i16;
+            o += 1;
+        }
+        for i in 0..64 {
+            for j in 0..128 {
+                net.w1[i][j] = (f[o] * QB as f32).round() as i16;
+                o += 1;
+            }
+        }
+        for i in 0..64 {
+            net.b1[i] = (f[o] * QA as f32 * QB as f32).round() as i32;
+            o += 1;
+        }
+        for b in 0..N_BUCKETS {
+            for i in 0..64 {
+                net.w2[b][i] = (f[o] * QB as f32).round() as i16;
+                o += 1;
+            }
+        }
+        for b in 0..N_BUCKETS {
+            net.b2[b] = (f[o] * QA as f32 * QB as f32).round() as i32;
+            o += 1;
+        }
+
+        net
     }
 
     /// Forward pass.  `acc` is a *single-perspective* hidden layer – i.e. the
     /// caller must already have selected the STM half of a DualAccumulator.
-    pub fn forward(&self, acc: &[f32; 128], bucket: usize) -> f32 {
+    pub fn forward(&self, acc: &[i16; 128], bucket: usize) -> f32 {
         #[cfg(target_arch = "x86_64")]
         {
             if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
@@ -60,51 +92,58 @@ impl Network {
         self.forward_scalar(acc, bucket)
     }
 
-    fn forward_scalar(&self, acc: &[f32; 128], bucket: usize) -> f32 {
-        let mut screlu_input = [0f32; 128];
-        for j in 0..128 {
-            screlu_input[j] = screlu(acc[j]);
-        }
-
-        let mut h1 = [0f32; 64];
+    fn forward_scalar(&self, acc: &[i16; 128], bucket: usize) -> f32 {
+        // Layer 1
+        let mut h1 = [0i32; 64];
         for i in 0..64 {
-            let mut sum = self.b1[i];
-            let w = &self.w1[i];
+            let mut sum = self.b1[i]; // i32
             for j in 0..128 {
-                sum += w[j] * screlu_input[j];
+                let a = (acc[j] as i32).clamp(0, QA);
+                sum += a * a * self.w1[i][j] as i32;
             }
-            h1[i] = screlu(sum);
+            h1[i] = (sum >> 8).clamp(0, QA); // divide by QA=256, keep clamped
         }
 
-        let mut out = self.b2[bucket];
+        // Layer 2
+        let mut out = self.b2[bucket]; // i32
         for i in 0..64 {
-            out += self.w2[bucket][i] * h1[i];
+            out += h1[i] * self.w2[bucket][i] as i32;
         }
-        sigmoid(out)
+
+        sigmoid(out as f32 / (QA * QB) as f32)
     }
 
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2,fma")]
-    unsafe fn forward_avx2(&self, acc: &[f32; 128], bucket: usize) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2,fma")]
+    unsafe fn forward_avx2(&self, acc: &[i16; 128], bucket: usize) -> f32 {
         use std::arch::x86_64::*;
 
-        let zero = _mm256_setzero_ps();
-        let one = _mm256_set1_ps(1.0);
-
+        // Convert i16 acc → f32, apply SCReLU
         let mut screlu_buf = [0f32; 128];
-        let stm_ptr = acc.as_ptr();
-        let out_ptr = screlu_buf.as_mut_ptr();
-        for k in (0..128).step_by(8) {
-            let x = _mm256_loadu_ps(stm_ptr.add(k));
-            let clamped = _mm256_min_ps(_mm256_max_ps(x, zero), one);
-            _mm256_storeu_ps(out_ptr.add(k), _mm256_mul_ps(clamped, clamped));
+        for k in 0..128 {
+            let a = (acc[k] as f32 / QA as f32).clamp(0.0, 1.0);
+            screlu_buf[k] = a * a;
         }
 
-        let mut h1 = [0f32; 64];
-        let s_ptr = screlu_buf.as_ptr();
-
+        // Convert i16 w1 → f32 once per forward (small cost)
+        let mut w1_f32 = [[0f32; 128]; 64];
         for i in 0..64 {
-            let w_ptr = self.w1[i].as_ptr();
+            for j in 0..128 {
+                w1_f32[i][j] = self.w1[i][j] as f32;
+            }
+        }
+        let mut w2_f32 = [0f32; 64];
+        for i in 0..64 {
+            w2_f32[i] = self.w2[bucket][i] as f32;
+        }
+
+        let s_ptr = screlu_buf.as_ptr();
+        let mut h1 = [0f32; 64];
+        for i in 0..64 {
+            let w_ptr = w1_f32[i].as_ptr();
+            let bias = self.b1[i] as f32 / (QA * QB) as f32;
             let mut a0 = _mm256_setzero_ps();
             let mut a1 = _mm256_setzero_ps();
             let mut a2 = _mm256_setzero_ps();
@@ -141,13 +180,15 @@ impl Network {
             let s128 = _mm_add_ps(lo, hi);
             let s64 = _mm_add_ps(s128, _mm_movehl_ps(s128, s128));
             let s32 = _mm_add_ss(s64, _mm_shuffle_ps(s64, s64, 1));
-            let dot = _mm_cvtss_f32(s32) + self.b1[i];
+            let dot = _mm_cvtss_f32(s32) + bias;
             let c = dot.clamp(0.0, 1.0);
             h1[i] = c * c;
         }
 
+        // Layer 2
         let h_ptr = h1.as_ptr();
-        let w2_ptr = self.w2[bucket].as_ptr();
+        let w2_ptr = w2_f32.as_ptr();
+        let bias2 = self.b2[bucket] as f32 / (QA * QB) as f32;
         let mut a0 = _mm256_setzero_ps();
         let mut a1 = _mm256_setzero_ps();
         let mut j = 0;
@@ -170,7 +211,7 @@ impl Network {
         let s128 = _mm_add_ps(lo, hi);
         let s64 = _mm_add_ps(s128, _mm_movehl_ps(s128, s128));
         let s32 = _mm_add_ss(s64, _mm_shuffle_ps(s64, s64, 1));
-        sigmoid(_mm_cvtss_f32(s32) + self.b2[bucket])
+        sigmoid(_mm_cvtss_f32(s32) + bias2)
     }
 }
 
@@ -179,14 +220,14 @@ impl Network {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[inline(always)]
-fn add_feature(acc: &mut [f32; 128], net: &Network, f: usize) {
+fn add_feature(acc: &mut [i16; 128], net: &Network, f: usize) {
     for i in 0..128 {
         acc[i] += net.w0[i][f];
     }
 }
 
 #[inline(always)]
-fn sub_feature(acc: &mut [f32; 128], net: &Network, f: usize) {
+fn sub_feature(acc: &mut [i16; 128], net: &Network, f: usize) {
     for i in 0..128 {
         acc[i] -= net.w0[i][f];
     }
@@ -216,7 +257,7 @@ fn sub_feature(acc: &mut [f32; 128], net: &Network, f: usize) {
 #[derive(Debug, Clone, Copy)]
 pub struct DualAccumulator {
     /// [0] = Cross-as-STM half, [1] = Circle-as-STM half
-    pub acc: [[f32; 128]; 2],
+    pub acc: [[i16; 128]; 2],
 }
 
 impl DualAccumulator {
@@ -289,7 +330,7 @@ impl DualAccumulator {
     }
 
     /// Return the accumulator half for whichever side is to move.
-    pub fn stm(&self, turn: Symbol) -> &[f32; 128] {
+    pub fn stm(&self, turn: Symbol) -> &[i16; 128] {
         match turn {
             Symbol::Cross => &self.acc[0],
             Symbol::Circle => &self.acc[1],
@@ -360,9 +401,7 @@ impl DualAccumulator {
 
 impl Default for DualAccumulator {
     fn default() -> Self {
-        Self {
-            acc: [[0.0; 128]; 2],
-        }
+        Self { acc: [[0; 128]; 2] }
     }
 }
 
@@ -371,7 +410,7 @@ impl Default for DualAccumulator {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub struct Accumulator(pub [f32; 128]);
+pub struct Accumulator(pub [i16; 128]);
 
 impl Accumulator {
     pub fn new(net: &Network, board: &TicTacToe) -> Self {
@@ -400,6 +439,6 @@ impl Accumulator {
 
 impl Default for Accumulator {
     fn default() -> Self {
-        Self([0.0; 128])
+        Self([0; 128])
     }
 }
