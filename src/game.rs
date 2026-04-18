@@ -35,6 +35,7 @@ pub fn random_game() -> Vec<Sample> {
             features,
             search_score: 0.5,
             outcome: 0.0,
+            ply: game.ply,
         }); // outcome filled later
 
         let mv = generate_random_legal_move(&game);
@@ -80,13 +81,14 @@ pub fn start_self_game_with_net(net: &Network, depth: i32) -> Vec<Sample> {
                 features,
                 search_score: search_score.clamp(0.0, 1.0),
                 outcome: 0.0,
+                ply: game.ply,
             },
             ply,
         });
 
         let delta = game.make(move_square);
 
-        if delta.cleared_board.is_some() {
+        if delta.cleared_board.is_some() || ply < 6 {
             pushed_samples.pop();
         }
     }

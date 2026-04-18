@@ -63,10 +63,9 @@ fn cleanup_old_generations(current_gen: i32) -> usize {
 }
 
 fn main() -> anyhow::Result<()> {
-    let mut gen_count = 1;
-    let mut best_gen = 0;
+    let mut gen_count = 43;
+    let mut best_gen = 40;
     let mut best_net = format!("databin/gen{}_weights.bin", gen_count - 1);
-    let fixed_net = format!("databin/gen0_weights.bin"); // this fixed net is to measure how well and confirming our network is training
 
     let mut depth = 3;
     let mut plateau_count = 0;

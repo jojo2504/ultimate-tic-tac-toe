@@ -6,6 +6,13 @@ use crate::{
     core::{MoveDelta, Symbol, TicTacToe},
 };
 
+const N_BUCKETS: usize = 4;
+
+// Bucket by ply (call this before forward)
+pub fn get_bucket(ply: usize) -> usize {
+    (ply * N_BUCKETS / 82).min(N_BUCKETS - 1)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Network weights
 // ─────────────────────────────────────────────────────────────────────────────
@@ -17,8 +24,8 @@ pub struct Network {
     pub b0: [f32; 128],
     pub w1: [[f32; 128]; 64],
     pub b1: [f32; 64],
-    pub w2: [[f32; 64]; 1],
-    pub b2: [f32; 1],
+    pub w2: [[f32; 64]; N_BUCKETS],
+    pub b2: [f32; N_BUCKETS],
 }
 
 #[inline(always)]
@@ -43,17 +50,17 @@ impl Network {
 
     /// Forward pass.  `acc` is a *single-perspective* hidden layer – i.e. the
     /// caller must already have selected the STM half of a DualAccumulator.
-    pub fn forward(&self, acc: &[f32; 128]) -> f32 {
+    pub fn forward(&self, acc: &[f32; 128], bucket: usize) -> f32 {
         #[cfg(target_arch = "x86_64")]
         {
             if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-                return unsafe { self.forward_avx2(acc) };
+                return unsafe { self.forward_avx2(acc, bucket) };
             }
         }
-        self.forward_scalar(acc)
+        self.forward_scalar(acc, bucket)
     }
 
-    fn forward_scalar(&self, acc: &[f32; 128]) -> f32 {
+    fn forward_scalar(&self, acc: &[f32; 128], bucket: usize) -> f32 {
         let mut screlu_input = [0f32; 128];
         for j in 0..128 {
             screlu_input[j] = screlu(acc[j]);
@@ -69,16 +76,16 @@ impl Network {
             h1[i] = screlu(sum);
         }
 
-        let mut out = self.b2[0];
+        let mut out = self.b2[bucket];
         for i in 0..64 {
-            out += self.w2[0][i] * h1[i];
+            out += self.w2[bucket][i] * h1[i];
         }
         sigmoid(out)
     }
 
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2,fma")]
-    unsafe fn forward_avx2(&self, acc: &[f32; 128]) -> f32 {
+    unsafe fn forward_avx2(&self, acc: &[f32; 128], bucket: usize) -> f32 {
         use std::arch::x86_64::*;
 
         let zero = _mm256_setzero_ps();
@@ -140,7 +147,7 @@ impl Network {
         }
 
         let h_ptr = h1.as_ptr();
-        let w2_ptr = self.w2[0].as_ptr();
+        let w2_ptr = self.w2[bucket].as_ptr();
         let mut a0 = _mm256_setzero_ps();
         let mut a1 = _mm256_setzero_ps();
         let mut j = 0;
@@ -163,7 +170,7 @@ impl Network {
         let s128 = _mm_add_ps(lo, hi);
         let s64 = _mm_add_ps(s128, _mm_movehl_ps(s128, s128));
         let s32 = _mm_add_ss(s64, _mm_shuffle_ps(s64, s64, 1));
-        sigmoid(_mm_cvtss_f32(s32) + self.b2[0])
+        sigmoid(_mm_cvtss_f32(s32) + self.b2[bucket])
     }
 }
 

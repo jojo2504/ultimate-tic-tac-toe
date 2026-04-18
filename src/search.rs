@@ -5,7 +5,7 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use crate::{
     core::{Result, TicTacToe},
     movegen::generate_moves,
-    network::{DualAccumulator, Network},
+    network::{DualAccumulator, Network, get_bucket},
 };
 
 #[derive(Default, Clone)]
@@ -80,9 +80,9 @@ impl Search {
             };
         }
 
-        // Leaf evaluation — FIX B: use the correct perspective half
         if depth == 0 {
-            return net.forward(dual_acc.stm(board.turn));
+            let bucket = get_bucket(board.ply);
+            return net.forward(dual_acc.stm(board.turn), bucket);
         }
 
         let mut best_score = f32::NEG_INFINITY;

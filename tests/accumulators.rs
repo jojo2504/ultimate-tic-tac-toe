@@ -2,7 +2,7 @@
 mod tests {
     use ultimate_tic_tac_toe::{
         core::{Symbol, TicTacToe},
-        network::{DualAccumulator, Network},
+        network::{DualAccumulator, Network, get_bucket},
         search::Search,
     };
 
@@ -109,7 +109,9 @@ mod tests {
         let net = load_net();
         let board = TicTacToe::new();
         let acc = DualAccumulator::new(&net, &board);
-        let score = net.forward(acc.stm(Symbol::Cross));
+
+        let bucket = get_bucket(board.ply);
+        let score = net.forward(acc.stm(Symbol::Cross), bucket);
         assert!(score.is_finite(), "score must be finite");
         assert!((0.0..=1.0).contains(&score), "score must be in [0, 1]");
     }

@@ -16,6 +16,7 @@ pub struct Sample {
     pub features: [f32; FEATURES_COUNT],
     pub search_score: f32,
     pub outcome: f32,
+    pub ply: usize,
 }
 
 pub fn generate_first_databin(gen_count: i32) -> anyhow::Result<()> {
