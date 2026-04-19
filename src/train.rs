@@ -21,7 +21,7 @@ pub struct Sample {
 
 pub fn generate_first_databin(gen_count: i32) -> anyhow::Result<()> {
     let mut all_samples: Vec<Sample> = vec![];
-    let games_samples: Vec<Vec<Sample>> = (0..1000)
+    let games_samples: Vec<Vec<Sample>> = (0..3000)
         .into_par_iter()
         .map(|i| {
             let samples = random_game();
@@ -41,7 +41,7 @@ pub fn generate_iterative_databin(gen_count: i32, best_gen: i32, depth: i32) -> 
     let mut all_samples: Vec<Sample> = vec![];
     let net = Network::load(format!("databin/gen{}_weights.bin", best_gen));
     let counter = std::sync::atomic::AtomicUsize::new(0);
-    let games_per_generation = if depth == 3 { 2000 } else { 1000 };
+    let games_per_generation = 3000;
 
     let games_samples: Vec<Vec<Sample>> = (0..games_per_generation)
         .into_par_iter()

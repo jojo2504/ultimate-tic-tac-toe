@@ -44,9 +44,9 @@ fn cleanup_old_generations(current_gen: i32) -> usize {
     }
     gens.sort();
 
-    // Remove data files older than current_gen - 20
+    // Remove data files older than current_gen - 35, keeping every 10-milestone
     for gen_num in gens {
-        if gen_num >= current_gen - 20 {
+        if gen_num >= current_gen - 35 || gen_num % 10 == 0 {
             break;
         }
         let data_path = format!("databin/gen{}_data.bin", gen_num);
@@ -67,9 +67,13 @@ fn main() -> anyhow::Result<()> {
     let mut best_gen = 0;
     let mut best_net = format!("databin/gen{}_weights.bin", gen_count - 1);
 
-    let mut depth = 3;
+    let depth = 3;
     let mut plateau_count = 0;
-    let mut global_elo = 1200.0;
+    let mut global_elo = fs::read_to_string("databin/global_elo.txt")
+        .unwrap_or_else(|_| "1200.0".to_string())
+        .trim()
+        .parse::<f32>()
+        .unwrap_or(1200.0);
 
     loop {
         println!("generating self-play data... (depth {depth})");
@@ -125,13 +129,12 @@ fn main() -> anyhow::Result<()> {
         }
 
         if plateau_count >= 4 {
-            depth += 1;
             plateau_count = 0;
             println!(
                 "{}",
                 format!(
-                    "\n>>> REJECTIONS PLATEAUED. AUTOMATICALLY BUMPING TRAINING DEPTH TO {} <<<\n",
-                    depth
+                    "\n>>> REJECTIONS PLATEAUING. BE CAREFUL <<< {} \n",
+                    plateau_count
                 )
                 .magenta()
                 .bold()
@@ -140,6 +143,7 @@ fn main() -> anyhow::Result<()> {
 
         if promoted {
             global_elo += elo_vs_best;
+            let _ = fs::write("databin/global_elo.txt", global_elo.to_string());
             println!(
                 "{}",
                 format!(

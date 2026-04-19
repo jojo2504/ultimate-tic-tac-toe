@@ -9,7 +9,7 @@ fn input() -> String {
 }
 
 fn main() {
-    let net = Network::load("databin/gen11_weights.bin".to_owned());
+    let net = Network::load("databin/gen98_weights.bin".to_owned());
     let mut board = TicTacToe::new();
     let mut search = Search::new();
 

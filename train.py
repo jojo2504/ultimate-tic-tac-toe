@@ -16,14 +16,14 @@ SCORE = 1
 LABEL = 1
 PLY = 1
 ROW_SIZE = FEATURES + SCORE + LABEL + PLY  # 202
-EPOCHS = 10
+EPOCHS = 5
 BATCH_SIZE = 8192
 LEARNING_RATE = 0.0005
 
 # Training-window config:
 #   GEN_WINDOW = N  → use the last N generations (e.g. 5)
 #   GEN_WINDOW = 0  → use ALL available generations
-GEN_WINDOW = 20
+GEN_WINDOW = 35
 
 # Weight of the newest generation relative to older ones.
 # 1.0 = equal weight; 2.0 = newest sampled twice as often, etc.
@@ -111,9 +111,11 @@ def build_windowed_dataset(
         )
 
     if window > 0:
-        selected = all_gens[-window:]
-        if 0 not in selected and 0 in all_gens:
-            selected.insert(0, 0)
+        selected_set = set(all_gens[-window:])
+        for g in all_gens:
+            if g % 10 == 0:
+                selected_set.add(g)
+        selected = sorted(list(selected_set))
     else:
         selected = all_gens
 
