@@ -4,6 +4,7 @@
 // - use that improved weights.bin into the next iteration of the loop
 
 use colored::Colorize;
+use serde_json::Value;
 use std::{fs, process::Command};
 use ultimate_tic_tac_toe::train::{self, tournament};
 
@@ -22,7 +23,7 @@ fn databin_size_bytes() -> u64 {
 
 /// Remove data files outside the 20-generation window to save disk space.
 /// Always keeps gen0 files and ALL weights files. Returns how many were removed.
-fn cleanup_old_generations(current_gen: i32) -> usize {
+fn cleanup_old_generations(current_gen: i32, window_length: i32) -> usize {
     let mut removed = 0;
     // Collect existing generation numbers (excluding gen0)
     let mut gens: Vec<i32> = vec![];
@@ -44,9 +45,9 @@ fn cleanup_old_generations(current_gen: i32) -> usize {
     }
     gens.sort();
 
-    // Remove data files older than current_gen - 35, keeping every 10-milestone
+    // Remove data files older than current_gen - window_length, keeping every 10-milestone
     for gen_num in gens {
-        if gen_num >= current_gen - 35 || gen_num % 10 == 0 {
+        if gen_num >= current_gen - window_length || gen_num % 10 == 0 {
             break;
         }
         let data_path = format!("databin/gen{}_data.bin", gen_num);
@@ -76,8 +77,33 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or(1200.0);
 
     loop {
-        println!("generating self-play data... (depth {depth})");
-        train::generate_iterative_databin(gen_count, best_gen, depth)?;
+        let mut games_per_generation = 3000;
+        let mut window_length = 35;
+        let mut plateau_threshold = 4;
+
+        if let Ok(config_str) = fs::read_to_string("config/config.json") {
+            if let Ok(config) = serde_json::from_str::<Value>(&config_str) {
+                if let Some(p) = config.get("plateau").and_then(|v| v.as_i64()) {
+                    plateau_threshold = p as i32;
+                }
+                if let Some(depth_config) =
+                    config.get("depth").and_then(|d| d.get(depth.to_string()))
+                {
+                    if let Some(g) = depth_config
+                        .get("games_per_generation")
+                        .and_then(|v| v.as_i64())
+                    {
+                        games_per_generation = g as i32;
+                    }
+                    if let Some(w) = depth_config.get("window_length").and_then(|v| v.as_i64()) {
+                        window_length = w as i32;
+                    }
+                }
+            }
+        }
+
+        println!("generating self-play data... (depth {depth}, games {games_per_generation})");
+        train::generate_iterative_databin(gen_count, best_gen, depth, games_per_generation)?;
 
         println!("training new databin");
         Command::new("python")
@@ -85,6 +111,8 @@ fn main() -> anyhow::Result<()> {
             .arg(gen_count.to_string())
             .arg("--base-weights")
             .arg(&best_net)
+            .arg("--depth")
+            .arg(depth.to_string())
             .status()?;
 
         let challenger = format!("databin/gen{}_weights.bin", gen_count);
@@ -128,7 +156,7 @@ fn main() -> anyhow::Result<()> {
             plateau_count = 0;
         }
 
-        if plateau_count >= 4 {
+        if plateau_count >= plateau_threshold {
             plateau_count = 0;
             println!(
                 "{}",
@@ -161,8 +189,8 @@ fn main() -> anyhow::Result<()> {
             );
         }
 
-        // Smart disk cleanup: remove data files outside the 20 gen window
-        let removed = cleanup_old_generations(gen_count);
+        // Smart disk cleanup: remove data files outside the window
+        let removed = cleanup_old_generations(gen_count, window_length);
         if removed > 0 {
             let size_mb = databin_size_bytes() as f64 / (1024.0 * 1024.0);
             println!(

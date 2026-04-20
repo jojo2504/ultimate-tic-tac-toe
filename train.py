@@ -1,5 +1,6 @@
 import argparse
 import glob
+import json
 import os
 import time
 from typing import Optional
@@ -19,6 +20,8 @@ ROW_SIZE = FEATURES + SCORE + LABEL + PLY  # 202
 EPOCHS = 5
 BATCH_SIZE = 8192
 LEARNING_RATE = 0.0005
+SCORE_RATIO = 0.8
+OUTCOME_RATIO = 0.2
 
 # Training-window config:
 #   GEN_WINDOW = N  → use the last N generations (e.g. 5)
@@ -61,7 +64,7 @@ def load_samples(path: str):
             buckets = torch.tensor(
                 np.clip(plies * N_BUCKETS // 82, 0, N_BUCKETS - 1), dtype=torch.long
             )
-            y = (0.8 * search_scores + 0.2 * outcomes).squeeze(1)
+            y = (SCORE_RATIO * search_scores + OUTCOME_RATIO * outcomes).squeeze(1)
 
             # ── BUG #1: validate label range ──────────────────────────
             y_min, y_max = y.min().item(), y.max().item()
@@ -194,7 +197,23 @@ class SinglePerspectiveNNUE(nn.Module):
 # ─────────────────────────────────────────────
 # Training loop
 # ─────────────────────────────────────────────
-def train(gen_count: int, base_weights: Optional[str] = None):
+def train(gen_count: int, base_weights: Optional[str] = None, depth: int = 3):
+    global BATCH_SIZE, LEARNING_RATE, SCORE_RATIO, OUTCOME_RATIO, GEN_WINDOW
+    try:
+        with open("config/config.json", "r") as f:
+            config = json.load(f)
+            depth_str = str(depth)
+            if "depth" in config and depth_str in config["depth"]:
+                d_conf = config["depth"][depth_str]
+                BATCH_SIZE = d_conf.get("batch_size", BATCH_SIZE)
+                LEARNING_RATE = d_conf.get("learning_rate", LEARNING_RATE)
+                SCORE_RATIO = d_conf.get("score_ratio", 80) / 100.0
+                OUTCOME_RATIO = d_conf.get("outcome_ratio", 20) / 100.0
+                GEN_WINDOW = d_conf.get("window_length", GEN_WINDOW)
+                print(f"Loaded config for depth {depth}")
+    except Exception as e:
+        print(f"Could not load config: {e}")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
@@ -282,6 +301,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--base-weights", type=str, default=None, help="Path to base weights to load"
     )
+    parser.add_argument(
+        "--depth",
+        type=int,
+        default=3,
+        help="Current depth used in data generation",
+    )
     args = parser.parse_args()
 
-    train(args.gen_count, base_weights=args.base_weights)
+    # LEARNING_RATE = args.depth
+    train(args.gen_count, base_weights=args.base_weights, depth=args.depth)
