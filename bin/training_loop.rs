@@ -48,7 +48,7 @@ fn cleanup_old_generations(current_gen: i32, window_length: i32) -> usize {
     // Remove data files older than current_gen - window_length, keeping every 10-milestone
     for gen_num in gens {
         if gen_num >= current_gen - window_length || gen_num % 10 == 0 {
-            break;
+            continue;
         }
         let data_path = format!("databin/gen{}_data.bin", gen_num);
         if fs::metadata(&data_path).is_ok() {
@@ -137,7 +137,7 @@ fn main() -> anyhow::Result<()> {
 
         for &past_gen in &pool {
             let past_net = format!("databin/gen{}_weights.bin", past_gen);
-            let elo = tournament(&past_net, &challenger, 400, depth);
+            let elo = tournament(&past_net, &challenger, 200, depth);
             println!("gen{gen_count} vs gen{past_gen}: {elo:+.1} Elo");
             total_elo += elo;
             if past_gen == best_gen {
@@ -167,6 +167,7 @@ fn main() -> anyhow::Result<()> {
                 .magenta()
                 .bold()
             );
+            break;
         }
 
         if promoted {
@@ -201,4 +202,6 @@ fn main() -> anyhow::Result<()> {
 
         gen_count += 1;
     }
+
+    Ok(())
 }

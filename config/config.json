@@ -17,10 +17,10 @@
       "batch_size": 16384
     },
     "5": {
-      "games_per_generation": 1000,
+      "games_per_generation": 1200,
       "learning_rate": 0.00005,
-      "score_ratio": 60,
-      "outcome_ratio": 40,
+      "score_ratio": 70,
+      "outcome_ratio": 30,
       "window_length": 35,
       "batch_size": 16384
     }
