@@ -50,3 +50,7 @@ path = "bin/enginevsplayer.rs"
 [[bin]]
 name = "enginevsengine"
 path = "bin/enginevsengine.rs"
+
+[[bin]]
+name = "eval_all"
+path = "bin/eval_all.rs"
