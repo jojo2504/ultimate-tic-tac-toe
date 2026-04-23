@@ -1,4 +1,4 @@
 # Ignore everything except self
-# This direectly is used to store data.bin for training purposes.
+# This direectly is used to store data.bin for training purposes as well as weights.bin for loading into a net
 **
 !.gitignore

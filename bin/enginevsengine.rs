@@ -1,8 +1,12 @@
+use std::env::args;
+
 use ultimate_tic_tac_toe::{core::TicTacToe, network::Network, search::Search};
 
 fn main() {
-    let engine1_path = "databin/gen0_weights.bin";
-    let engine2_path = "databin/gen181_weights.bin";
+    let args: Vec<String> = args().collect();
+
+    let engine1_path = format!("databin/gen{}_weights.bin", args[1]);
+    let engine2_path = format!("databin/gen{}_weights.bin", args[2]);
 
     println!("Loading Engine 1 (Cross): {}", engine1_path);
     let net1 = Network::load(engine1_path.to_string());
