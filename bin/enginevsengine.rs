@@ -18,7 +18,7 @@ fn main() {
     let mut search1 = Search::new();
     let mut search2 = Search::new();
 
-    let depth = args[3];
+    let depth: i32 = args[3].parse::<i32>().unwrap();
 
     println!("Starting game at depth {}...", depth);
     println!("{}", board);
