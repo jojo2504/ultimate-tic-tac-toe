@@ -18,7 +18,7 @@ fn main() {
     let mut search1 = Search::new();
     let mut search2 = Search::new();
 
-    let depth = 9;
+    let depth = args[3];
 
     println!("Starting game at depth {}...", depth);
     println!("{}", board);

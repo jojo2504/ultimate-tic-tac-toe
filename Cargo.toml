@@ -40,10 +40,6 @@ name = "training_loop"
 path = "bin/training_loop.rs"
 
 [[bin]]
-name = "train"
-path = "bin/train.rs"
-
-[[bin]]
 name = "enginevsplayer"
 path = "bin/enginevsplayer.rs"
 
