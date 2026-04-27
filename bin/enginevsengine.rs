@@ -28,10 +28,10 @@ fn main() {
 
         let mv = if cross_to_move {
             println!("Engine 1 (Cross) is thinking...");
-            search1.think(&board, depth, &net1)
+            search1.think(&board, depth, &net1, None)
         } else {
             println!("Engine 2 (Circle) is thinking...");
-            search2.think(&board, depth, &net2)
+            search2.think(&board, depth, &net2, None)
         };
 
         board.make(mv);

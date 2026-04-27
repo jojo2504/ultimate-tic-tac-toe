@@ -9,7 +9,7 @@ pub fn start_self_game() {
     let mut search = Search::new();
 
     while !board.check_win() && !board.is_full() {
-        let mv = search.think(&board, 1, &net);
+        let mv = search.think(&board, 1, &net, None);
         board.make(mv as u8);
         println!("{}", board);
     }

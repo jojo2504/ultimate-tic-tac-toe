@@ -1,4 +1,8 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    env::current_exe,
+    sync::{Arc, Mutex, atomic::AtomicBool},
+};
 
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
@@ -26,7 +30,7 @@ pub struct TTEntry {
 
 #[derive(Clone)]
 pub struct Search {
-    tt: HashMap<u128, TTEntry>,
+    tt: Arc<Mutex<HashMap<u128, TTEntry>>>,
     /// External accumulator stack for caller-side incremental updates
     /// (used in tournament() and similar drivers).
     pub acc: [DualAccumulator; 81],
@@ -35,7 +39,7 @@ pub struct Search {
 impl Search {
     pub fn new() -> Self {
         Self {
-            tt: HashMap::new(),
+            tt: Arc::new(Mutex::new(HashMap::new())),
             acc: [DualAccumulator::default(); 81],
         }
     }
@@ -48,11 +52,18 @@ impl Search {
         beta: f32,
         net: &Network,
         dual_acc: DualAccumulator,
+        stop: Option<&Arc<AtomicBool>>,
     ) -> f32 {
+        if let Some(stop_signal) = stop {
+            if stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
+                return 0.0;
+            }
+        }
+
         let alpha_orig = alpha;
 
         // Transposition table lookup
-        if let Some(tt_entry) = self.tt.get(&board.zobrist_key) {
+        if let Some(tt_entry) = self.tt.lock().unwrap().get(&board.zobrist_key) {
             if tt_entry.depth >= depth {
                 match tt_entry.flag {
                     NodeType::Exact => return tt_entry.value,
@@ -98,8 +109,16 @@ impl Search {
             let mut child_acc = dual_acc;
             child_acc.apply_delta(net, &delta);
 
-            let score =
-                1.0 - self.negamax(&child, depth - 1, 1.0 - beta, 1.0 - alpha, net, child_acc);
+            let score = 1.0
+                - self.negamax(
+                    &child,
+                    depth - 1,
+                    1.0 - beta,
+                    1.0 - alpha,
+                    net,
+                    child_acc,
+                    stop,
+                );
 
             if score > best_score {
                 best_score = score;
@@ -120,7 +139,7 @@ impl Search {
             NodeType::Exact
         };
 
-        self.tt.insert(
+        self.tt.lock().unwrap().insert(
             board.zobrist_key,
             TTEntry {
                 depth,
@@ -132,7 +151,13 @@ impl Search {
         best_score
     }
 
-    pub fn think(&mut self, board: &TicTacToe, depth: i32, net: &Network) -> u8 {
+    pub fn think(
+        &mut self,
+        board: &TicTacToe,
+        depth: i32,
+        net: &Network,
+        stop: Option<&Arc<AtomicBool>>,
+    ) -> u8 {
         let root_acc = DualAccumulator::new(net, board);
         let mut moves = generate_moves(board);
         let move_bit: Vec<u8> = {
@@ -155,7 +180,8 @@ impl Search {
                 child_acc.apply_delta(net, &delta);
 
                 let mut local_self = self.clone();
-                let score = 1.0 - local_self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc);
+                let score =
+                    1.0 - local_self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc, stop);
                 (score, mv)
             })
             .reduce(
@@ -233,7 +259,7 @@ impl Search {
             let mut child_acc = root_acc;
             child_acc.apply_delta(net, &delta);
 
-            let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc);
+            let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc, None);
             move_scores[count] = (mv, score);
             count += 1;
         }
@@ -269,5 +295,16 @@ impl Search {
         }
 
         (move_scores[..count].last().unwrap().0, best_score)
+    }
+
+    // Iterative deepening is not returning anything as we are not using it in the main search move as no time limit has been imposed.
+    // We are only updating the transposition table here when it's the other player's turn.
+    pub fn iterative_deepening(&mut self, board: &TicTacToe, net: &Network, stop: Arc<AtomicBool>) {
+        let mut current_depth = 1;
+
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            self.think(board, current_depth, net, Some(&stop.clone()));
+            current_depth += 1;
+        }
     }
 }

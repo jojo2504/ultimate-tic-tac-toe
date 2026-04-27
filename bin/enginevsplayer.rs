@@ -1,4 +1,12 @@
-use std::{env::args, io::stdin};
+use std::{
+    env::args,
+    io::stdin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+};
 
 use anyhow::bail;
 use ultimate_tic_tac_toe::{core::TicTacToe, network::Network, search::Search};
@@ -32,6 +40,7 @@ fn main() -> anyhow::Result<()> {
     let mut search = Search::new();
 
     let mut buffer = String::new();
+    println!("set engine to depth: {}", args[2]);
     println!("Who starts first ? (player || engine)");
     stdin().read_line(&mut buffer)?;
 
@@ -44,8 +53,27 @@ fn main() -> anyhow::Result<()> {
     println!("{}", board);
     while !board.check_win() && !board.is_full() {
         let mv = match turn {
-            0 => input(&board, &mut buffer),
-            1 => search.think(&board, 7, &net),
+            0 => {
+                let stop_pondering = Arc::new(AtomicBool::new(false));
+                let ponder_signal = Arc::clone(&stop_pondering);
+                let mut ponder_search = search.clone();
+                let ponder_board = board.clone();
+                let ponder_net = net.clone();
+
+                let ponder_handle = thread::spawn(move || {
+                    ponder_search.iterative_deepening(&ponder_board, &ponder_net, stop_pondering);
+                });
+
+                let player_move = input(&board, &mut buffer);
+                ponder_signal.store(true, Ordering::Relaxed);
+                let _ = ponder_handle.join();
+
+                player_move
+            }
+            1 => {
+                println!("Engine is thinking...");
+                search.think(&board, args[2].parse::<i32>().unwrap(), &net, None)
+            }
             _ => unreachable!(),
         };
 

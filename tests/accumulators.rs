@@ -96,7 +96,7 @@ mod tests {
 
         let mut search = Search::new();
         search.acc[0] = before;
-        search.think(&board, 4, &net);
+        search.think(&board, 4, &net, None);
 
         // search.acc[0] must be unchanged
         assert_eq!(search.acc[0].acc[0], before.acc[0]);

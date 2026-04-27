@@ -22,9 +22,9 @@ fn play_game(
         let best_to_move = cross_to_move == best_is_cross;
 
         let mv = if best_to_move {
-            best_search.think(&game, depth, best_net)
+            best_search.think(&game, depth, best_net, None)
         } else {
-            opp_search.think(&game, depth, opp_net)
+            opp_search.think(&game, depth, opp_net, None)
         };
 
         game.make(mv);
@@ -60,7 +60,11 @@ fn main() -> anyhow::Result<()> {
     let mut available_gens: Vec<i32> = networks.keys().cloned().collect();
     available_gens.sort();
 
-    let mut candidates: Vec<i32> = available_gens.iter().cloned().filter(|&g| g >= 160 && g <= 181).collect();
+    let mut candidates: Vec<i32> = available_gens
+        .iter()
+        .cloned()
+        .filter(|&g| g >= 160 && g <= 181)
+        .collect();
     candidates.sort();
 
     println!(
