@@ -19,8 +19,9 @@ mod tests {
         // Start from a scratch accumulator for the empty board
         let mut acc = DualAccumulator::new(net, &board);
         for &sq in squares {
+            let parent_board = board.clone();
             let delta = board.make(sq);
-            acc.apply_delta(net, &delta);
+            acc.apply_delta(net, &delta, &parent_board, &board);
         }
         acc
     }

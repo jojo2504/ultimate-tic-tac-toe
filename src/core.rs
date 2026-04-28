@@ -7,7 +7,7 @@ use once_cell::sync::Lazy;
 use rand::random;
 use std::fmt;
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Symbol {
     #[default]
     Cross = 1,
@@ -211,7 +211,26 @@ impl TicTacToe {
         }
         match self.current_focus {
             Some(f) => {
-                features[189 + f as usize] = 1.0;
+                let f_usize = f as usize;
+                features[189 + f_usize] = 1.0;
+
+                let base = crate::constants::MAP[f_usize] as usize;
+                let indices = [
+                    base,
+                    base + 1,
+                    base + 2,
+                    base + 9,
+                    base + 10,
+                    base + 11,
+                    base + 18,
+                    base + 19,
+                    base + 20,
+                ];
+
+                for (j, &idx) in indices.iter().enumerate() {
+                    features[199 + j] = ((stm_bb >> idx) & 1) as f32;
+                    features[208 + j] = ((nstm_bb >> idx) & 1) as f32;
+                }
             }
             None => {
                 features[198] = 1.0;
@@ -245,6 +264,10 @@ impl fmt::Display for TicTacToe {
                     " X ".white().on_blue().bold()
                 } else if circle & mask != 0 {
                     " O ".black().on_red().bold()
+                } else if let Some(focus) = self.current_focus
+                    && focus == CELL_TO_SUBBOARD_INDEX[row * 9 + col]
+                {
+                    " . ".yellow()
                 } else {
                     " . ".dimmed()
                 };

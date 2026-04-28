@@ -66,7 +66,7 @@ pub fn generate_iterative_databin(
     flush_samples(&all_samples, gen_count)
 }
 
-fn flush_samples(samples: &[Sample], gen_count: i32) -> anyhow::Result<()> {
+pub fn flush_samples(samples: &[Sample], gen_count: i32) -> anyhow::Result<()> {
     let file = std::fs::File::create(format!("databin/gen{}_data.bin", gen_count))?;
     let mut writer = BufWriter::new(file);
     for s in samples {
@@ -109,16 +109,23 @@ pub fn tournament(
 
                 if challenger_to_move {
                     let mv = challenger_search.think_training(&game, depth, &challenger_net);
-                    let old_ply = game.ply;
+                    let mut parent_game = game.clone();
+                    let old_ply = parent_game.ply;
                     let delta = game.make(mv);
                     challenger_search.acc[game.ply] = challenger_search.acc[old_ply];
-                    challenger_search.acc[game.ply].apply_delta(&challenger_net, &delta);
+                    challenger_search.acc[game.ply].apply_delta(
+                        &challenger_net,
+                        &delta,
+                        &parent_game,
+                        &game,
+                    );
                 } else {
                     let mv = base_search.think_training(&game, depth, &base_net);
-                    let old_ply = game.ply;
+                    let mut parent_game = game.clone();
+                    let old_ply = parent_game.ply;
                     let delta = game.make(mv);
                     base_search.acc[game.ply] = base_search.acc[old_ply];
-                    base_search.acc[game.ply].apply_delta(&base_net, &delta);
+                    base_search.acc[game.ply].apply_delta(&base_net, &delta, &parent_game, &game);
                 }
             }
 

@@ -20,10 +20,6 @@ test-case = "3.3.1"
 debug = true        # keep symbols in release build
 
 [[bin]]
-name = "gendatabin"
-path = "bin/gendatabin.rs"
-
-[[bin]]
 name = "selfplay"
 path = "bin/selfplay.rs"
 
@@ -50,3 +46,7 @@ path = "bin/enginevsengine.rs"
 [[bin]]
 name = "eval_all"
 path = "bin/eval_all.rs"
+
+[[bin]]
+name="bootstrap"
+path="bin/bootstrap.rs"

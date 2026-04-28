@@ -335,6 +335,31 @@ impl DualAccumulator {
         add_feature(&mut da.acc[0], net, focus_feat);
         add_feature(&mut da.acc[1], net, focus_feat);
 
+        if let Some(f) = board.current_focus {
+            let base = crate::constants::MAP[f as usize] as usize;
+            let indices = [
+                base,
+                base + 1,
+                base + 2,
+                base + 9,
+                base + 10,
+                base + 11,
+                base + 18,
+                base + 19,
+                base + 20,
+            ];
+            for (j, &idx) in indices.iter().enumerate() {
+                if (cross_bb >> idx) & 1 != 0 {
+                    add_feature(&mut da.acc[0], net, 199 + j);
+                    add_feature(&mut da.acc[1], net, 208 + j);
+                }
+                if (circle_bb >> idx) & 1 != 0 {
+                    add_feature(&mut da.acc[0], net, 208 + j);
+                    add_feature(&mut da.acc[1], net, 199 + j);
+                }
+            }
+        }
+
         da
     }
 
@@ -353,7 +378,13 @@ impl DualAccumulator {
     ///   2. Subtraction: old_focus is properly removed before new_focus is added.
     ///   3. Double trailing_zeros: cleared_board is already an index 0-8,
     ///      not a bitboard, so we use it directly without trailing_zeros().
-    pub fn apply_delta(&mut self, net: &Network, delta: &MoveDelta) {
+    pub fn apply_delta(
+        &mut self,
+        net: &Network,
+        delta: &MoveDelta,
+        parent_board: &TicTacToe,
+        child_board: &TicTacToe,
+    ) {
         let sq = delta.square as usize;
 
         // ── 1. Piece placement ────────────────────────────────────────────────
@@ -401,10 +432,89 @@ impl DualAccumulator {
             Some(f) => 189 + f as usize,
             None => 198,
         };
+
         sub_feature(&mut self.acc[0], net, old_feat);
         sub_feature(&mut self.acc[1], net, old_feat);
+
         add_feature(&mut self.acc[0], net, new_feat);
         add_feature(&mut self.acc[1], net, new_feat);
+
+        // ── 4. Active Board Pieces ───────────────────────────────────────────
+        // Subtract features for pieces on the old active board
+        if let Some(f) = delta.old_focus {
+            let base = crate::constants::MAP[f as usize] as usize;
+            let indices = [
+                base,
+                base + 1,
+                base + 2,
+                base + 9,
+                base + 10,
+                base + 11,
+                base + 18,
+                base + 19,
+                base + 20,
+            ];
+
+            let parent_cross_bb = if parent_board.turn == Symbol::Cross {
+                parent_board.side_bitboard ^ parent_board.bitboard
+            } else {
+                parent_board.side_bitboard
+            };
+            let parent_circle_bb = if parent_board.turn == Symbol::Circle {
+                parent_board.side_bitboard ^ parent_board.bitboard
+            } else {
+                parent_board.side_bitboard
+            };
+
+            for (j, &idx) in indices.iter().enumerate() {
+                if (parent_cross_bb >> idx) & 1 != 0 {
+                    sub_feature(&mut self.acc[0], net, 199 + j);
+                    sub_feature(&mut self.acc[1], net, 208 + j);
+                }
+                if (parent_circle_bb >> idx) & 1 != 0 {
+                    sub_feature(&mut self.acc[0], net, 208 + j);
+                    sub_feature(&mut self.acc[1], net, 199 + j);
+                }
+            }
+        }
+
+        // Add features for pieces on the new active board
+        if let Some(f) = delta.new_focus {
+            let base = crate::constants::MAP[f as usize] as usize;
+            let indices = [
+                base,
+                base + 1,
+                base + 2,
+                base + 9,
+                base + 10,
+                base + 11,
+                base + 18,
+                base + 19,
+                base + 20,
+            ];
+
+            let child_cross_bb = if child_board.turn == Symbol::Cross {
+                child_board.side_bitboard ^ child_board.bitboard
+            } else {
+                child_board.side_bitboard
+            };
+            let child_circle_bb = if child_board.turn == Symbol::Circle {
+                child_board.side_bitboard ^ child_board.bitboard
+            } else {
+                child_board.side_bitboard
+            };
+
+            for (j, &idx) in indices.iter().enumerate() {
+                if (child_cross_bb >> idx) & 1 != 0 {
+                    add_feature(&mut self.acc[0], net, 199 + j);
+                    add_feature(&mut self.acc[1], net, 208 + j);
+                }
+                if (child_circle_bb >> idx) & 1 != 0 {
+                    add_feature(&mut self.acc[0], net, 208 + j);
+                    add_feature(&mut self.acc[1], net, 199 + j);
+                }
+            }
+        }
     }
 }
 

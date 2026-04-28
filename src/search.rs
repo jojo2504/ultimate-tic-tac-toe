@@ -107,7 +107,7 @@ impl Search {
             let delta = child.make(mv);
 
             let mut child_acc = dual_acc;
-            child_acc.apply_delta(net, &delta);
+            child_acc.apply_delta(net, &delta, board, &child);
 
             let score = 1.0
                 - self.negamax(
@@ -177,7 +177,7 @@ impl Search {
                 let delta = child.make(mv);
 
                 let mut child_acc = root_acc;
-                child_acc.apply_delta(net, &delta);
+                child_acc.apply_delta(net, &delta, board, &child);
 
                 let mut local_self = self.clone();
                 let score =
@@ -257,7 +257,7 @@ impl Search {
             let delta = child.make(mv);
 
             let mut child_acc = root_acc;
-            child_acc.apply_delta(net, &delta);
+            child_acc.apply_delta(net, &delta, board, &child);
 
             let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc, None);
             move_scores[count] = (mv, score);

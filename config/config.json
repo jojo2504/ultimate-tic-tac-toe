@@ -6,23 +6,35 @@
       "score_ratio": 80,
       "outcome_ratio": 20,
       "window_length": 25,
-      "batch_size": 8192
+      "batch_size": 8192,
+      "epochs": 15
     },
     "4": {
-      "games_per_generation": 1200,
-      "learning_rate": 0.0001,
-      "score_ratio": 70,
-      "outcome_ratio": 30,
+      "games_per_generation": 1500,
+      "learning_rate": 0.0003,
+      "score_ratio": 75,
+      "outcome_ratio": 25,
       "window_length": 30,
-      "batch_size": 16384
+      "batch_size": 16384,
+      "epochs": 12
     },
     "5": {
       "games_per_generation": 1200,
-      "learning_rate": 0.00005,
+      "learning_rate": 0.0002,
       "score_ratio": 70,
       "outcome_ratio": 30,
       "window_length": 35,
-      "batch_size": 16384
+      "batch_size": 16384,
+      "epochs": 10
+    },
+    "6": {
+      "games_per_generation": 800,
+      "learning_rate": 0.0001,
+      "score_ratio": 65,
+      "outcome_ratio": 35,
+      "window_length": 40,
+      "batch_size": 16384,
+      "epochs": 8
     }
   },
   "plateau": 4

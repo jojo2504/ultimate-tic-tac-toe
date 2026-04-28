@@ -18,7 +18,7 @@ fn input(board: &TicTacToe, mut buffer: &mut String) -> u8 {
     loop {
         buffer.clear();
         stdin().read_line(&mut buffer).unwrap();
-        println!("new buffer {}", buffer);
+        println!("new buffer {}", buffer.trim());
         player_mv = match buffer.trim().parse::<u8>() {
             Ok(mv) if board.validate_move(mv).is_ok() => mv,
             _ => {
@@ -77,6 +77,7 @@ fn main() -> anyhow::Result<()> {
             _ => unreachable!(),
         };
 
+        println!("played {} or ({}, {})", mv, mv / 9, mv % 9);
         board.make(mv);
         println!("{}", board);
         turn ^= 1;

@@ -12,25 +12,40 @@ import torch.nn as nn
 # ─────────────────────────────────────────────
 # Hyperparameters
 # ─────────────────────────────────────────────
-FEATURES = 199
+FEATURES = 217
 SCORE = 1
 LABEL = 1
 PLY = 1
-ROW_SIZE = FEATURES + SCORE + LABEL + PLY  # 202
-EPOCHS = 5
+ROW_SIZE = FEATURES + SCORE + LABEL + PLY  # 220
+
+EPOCHS = 15  # raised ceiling — early stopping will cut this short when needed
 BATCH_SIZE = 8192
 LEARNING_RATE = 0.0005
 SCORE_RATIO = 0.8
 OUTCOME_RATIO = 0.2
 
+# Minimum samples-to-parameters ratio. If we fall below this we warn loudly.
+# Source: community best-practice — 10× params is the lower bound before loss plateaus.
+MIN_SAMPLES_PER_PARAM = 10
+
+# Early stopping: halt if val loss does not improve for this many epochs.
+EARLY_STOP_PATIENCE = 3
+
+# LR scheduler: reduce LR by this factor when val loss plateaus for patience//2 epochs.
+LR_SCHEDULER_PATIENCE = 2
+LR_SCHEDULER_FACTOR = 0.5
+LR_MIN = 1e-6
+
 # Training-window config:
-#   GEN_WINDOW = N  → use the last N generations (e.g. 5)
+#   GEN_WINDOW = N  → use the last N generations (e.g. 35)
 #   GEN_WINDOW = 0  → use ALL available generations
 GEN_WINDOW = 35
 
 # Weight of the newest generation relative to older ones.
-# 1.0 = equal weight; 2.0 = newest sampled twice as often, etc.
 NEWEST_GEN_WEIGHT = 2.0
+
+# Fraction of samples held out as the validation set.
+VAL_SPLIT = 0.10
 
 N_BUCKETS = 4
 
@@ -66,7 +81,6 @@ def load_samples(path: str):
             )
             y = (SCORE_RATIO * search_scores + OUTCOME_RATIO * outcomes).squeeze(1)
 
-            # ── BUG #1: validate label range ──────────────────────────
             y_min, y_max = y.min().item(), y.max().item()
             if y_min < 0.0 or y_max > 1.0:
                 raise ValueError(
@@ -82,12 +96,11 @@ def load_samples(path: str):
 
 
 def discover_generations(databin_dir: str = "./databin") -> list[int]:
-    """Return sorted list of generation numbers present in databin/."""
     pattern = os.path.join(databin_dir, "gen*_data.bin")
     paths = glob.glob(pattern)
     gens = []
     for p in paths:
-        base = os.path.basename(p)  # gen3_data.bin
+        base = os.path.basename(p)
         num = base.replace("gen", "").replace("_data.bin", "")
         try:
             gens.append(int(num))
@@ -98,14 +111,33 @@ def discover_generations(databin_dir: str = "./databin") -> list[int]:
 
 def build_windowed_dataset(
     current_gen: int,
+    lineage: Optional[list[int]] = None,  # ← NEW: only use promoted gens when provided
     window: int = GEN_WINDOW,
     newest_weight: float = NEWEST_GEN_WEIGHT,
     databin_dir: str = "./databin",
 ):
-    all_gens = discover_generations(databin_dir)
+    """
+    Build the training tensor from available generation data files.
 
-    # Only keep gens up to current_gen (don't accidentally use future data)
+    If `lineage` is provided (list of promoted gen numbers passed from auto_train.rs),
+    only those generations are eligible — rejected gens are excluded even if their
+    data file still exists on disk.  The rolling `window` is then applied on top of
+    the lineage list to keep memory bounded.
+    """
+    all_gens = discover_generations(databin_dir)
     all_gens = [g for g in all_gens if g <= current_gen]
+
+    if lineage is not None:
+        lineage_set = set(lineage)
+        # Always include gen0 (bootstrap baseline) and 10-gen milestones that are
+        # in the lineage so we never lose the historical anchor.
+        filtered = [g for g in all_gens if g in lineage_set or g == 0]
+        if not filtered:
+            # Graceful fallback: lineage filtering removed everything — use raw window
+            print("[warn] lineage filter removed all gens, falling back to full window")
+            filtered = all_gens
+        all_gens = sorted(set(filtered))
+        print(f"Lineage filter applied — eligible generations: {all_gens}")
 
     if not all_gens:
         raise FileNotFoundError(
@@ -118,15 +150,13 @@ def build_windowed_dataset(
         for g in all_gens:
             if g % 10 == 0:
                 selected_set.add(g)
-        selected = sorted(list(selected_set))
+        selected = sorted(selected_set)
     else:
         selected = all_gens
 
     print(f"\nTraining window: generations {selected}")
 
-    X_list = []
-    y_list = []
-    b_list = []
+    X_list, y_list, b_list = [], [], []
     for gen in selected:
         path = os.path.join(databin_dir, f"gen{gen}_data.bin")
         if not os.path.exists(path):
@@ -159,7 +189,7 @@ class SCReLU(nn.Module):
 
 
 class SinglePerspectiveNNUE(nn.Module):
-    def __init__(self, features: int = 199, hl: int = 128):
+    def __init__(self, features: int = FEATURES, hl: int = 128):
         super().__init__()
         self.fc0 = nn.Linear(features, hl)
         self.fc1 = nn.Linear(hl, 64)
@@ -167,12 +197,9 @@ class SinglePerspectiveNNUE(nn.Module):
         self.screlu = SCReLU()
 
     def forward(self, x, buckets: torch.Tensor):
-        # buckets: [batch] int64 tensor with values 0..N_BUCKETS-1
         l1 = self.screlu(self.fc0(x))
         l2 = self.screlu(self.fc1(l1))
         all_out = self.fc2(l2)  # [batch, N_BUCKETS]
-
-        # Pick the right bucket output per sample
         out = all_out.gather(1, buckets.unsqueeze(1)).squeeze(1)
         return torch.sigmoid(out)
 
@@ -181,24 +208,86 @@ class SinglePerspectiveNNUE(nn.Module):
         with open(path, "rb") as f:
             raw = f.read()
         all_weights = np.frombuffer(raw, dtype=np.float32)
-
         offset = 0
         with torch.no_grad():
             for p in self.parameters():
                 numel = p.numel()
-                w = all_weights[
-                    offset : offset + numel
-                ].copy()  # make writable to avoid PyTorch warning
+                w = all_weights[offset : offset + numel].copy()
                 p.copy_(torch.from_numpy(w).view_as(p))
                 offset += numel
         print(f"  Loaded {offset:,} floats.")
 
+    def count_params(self) -> int:
+        return sum(p.numel() for p in self.parameters())
+
 
 # ─────────────────────────────────────────────
-# Training loop
+# Train / val split helpers
 # ─────────────────────────────────────────────
-def train(gen_count: int, base_weights: Optional[str] = None, depth: int = 3):
-    global BATCH_SIZE, LEARNING_RATE, SCORE_RATIO, OUTCOME_RATIO, GEN_WINDOW
+def split_dataset(X, y, b, val_fraction: float = VAL_SPLIT):
+    """Shuffle and split into train / val tensors."""
+    n = len(X)
+    perm = torch.randperm(n)
+    X, y, b = X[perm], y[perm], b[perm]
+
+    n_val = max(1, int(n * val_fraction))
+    n_tr = n - n_val
+
+    return (
+        X[:n_tr],
+        y[:n_tr],
+        b[:n_tr],  # train
+        X[n_tr:],
+        y[n_tr:],
+        b[n_tr:],  # val
+    )
+
+
+def run_epoch(
+    model, X, y, b, batch_size, device, optimizer=None, loss_fn=None, training=True
+):
+    """Run one full pass.  Returns average loss."""
+    model.train(training)
+    total_loss = 0.0
+    n = len(X)
+    indices = (
+        torch.randperm(n, device=device) if training else torch.arange(n, device=device)
+    )
+    X_s, y_s, b_s = X[indices], y[indices], b[indices]
+
+    with torch.set_grad_enabled(training):
+        for start in range(0, n, batch_size):
+            bX = X_s[start : start + batch_size]
+            by = y_s[start : start + batch_size]
+            bb = b_s[start : start + batch_size]
+
+            if training:
+                optimizer.zero_grad()
+
+            pred = model(bX, bb)
+            loss = loss_fn(pred, by)
+
+            if training:
+                loss.backward()
+                optimizer.step()
+
+            total_loss += loss.item()
+
+    return total_loss / max(1, (n + batch_size - 1) // batch_size)
+
+
+# ─────────────────────────────────────────────
+# Training entry point
+# ─────────────────────────────────────────────
+def train(
+    gen_count: int,
+    base_weights: Optional[str] = None,
+    depth: int = 3,
+    lineage: Optional[list[int]] = None,
+):
+    global BATCH_SIZE, LEARNING_RATE, SCORE_RATIO, OUTCOME_RATIO, GEN_WINDOW, EPOCHS
+
+    # ── Config override ────────────────────────────────────────────────
     try:
         with open("config/config.json", "r") as f:
             config = json.load(f)
@@ -210,6 +299,7 @@ def train(gen_count: int, base_weights: Optional[str] = None, depth: int = 3):
                 SCORE_RATIO = d_conf.get("score_ratio", 80) / 100.0
                 OUTCOME_RATIO = d_conf.get("outcome_ratio", 20) / 100.0
                 GEN_WINDOW = d_conf.get("window_length", GEN_WINDOW)
+                EPOCHS = d_conf.get("epochs", EPOCHS)
                 print(f"Loaded config for depth {depth}")
     except Exception as e:
         print(f"Could not load config: {e}")
@@ -217,67 +307,139 @@ def train(gen_count: int, base_weights: Optional[str] = None, depth: int = 3):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # ── Build windowed tensors and move to VRAM ────────────────────────
+    # ── Build dataset ──────────────────────────────────────────────────
     X_all, y_all, b_all = build_windowed_dataset(
         current_gen=gen_count,
+        lineage=lineage,
         window=GEN_WINDOW,
         newest_weight=NEWEST_GEN_WEIGHT,
     )
 
-    print("Moving dataset to GPU VRAM...")
-    t0 = time.time()
-    X_all = X_all.to(device)
-    y_all = y_all.to(device)
-    b_all = b_all.to(device)
-    print(f"Dataset moved in {time.time() - t0:.2f}s")
-
-    n_samples = len(X_all)
-
+    # ── Dataset-size vs parameter-count health check ───────────────────
     model = SinglePerspectiveNNUE(features=FEATURES, hl=128)
+    total_params = model.count_params()
+    n_samples = len(X_all)
+    ratio = n_samples / total_params
+
+    print(f"\nModel parameters : {total_params:,}")
+    print(f"Training samples : {n_samples:,}")
+    print(
+        f"Samples / params : {ratio:.1f}× (minimum recommended: {MIN_SAMPLES_PER_PARAM}×)"
+    )
+
+    if ratio < MIN_SAMPLES_PER_PARAM:
+        print(
+            f"\n[WARN] Only {ratio:.1f}× samples-per-param "
+            f"(need ≥{MIN_SAMPLES_PER_PARAM}×). "
+            "Loss will likely plateau early. "
+            "Consider increasing games_per_generation.\n"
+        )
+    else:
+        print(f"Dataset size OK ✓\n")
+
+    # ── Train / val split and move to device ──────────────────────────
+    X_tr, y_tr, b_tr, X_val, y_val, b_val = split_dataset(X_all, y_all, b_all)
+
+    print(f"Train samples : {len(X_tr):,}  |  Val samples : {len(X_val):,}")
+    print("Moving dataset to device …")
+    t0 = time.time()
+    X_tr, y_tr, b_tr = X_tr.to(device), y_tr.to(device), b_tr.to(device)
+    X_val, y_val, b_val = X_val.to(device), y_val.to(device), b_val.to(device)
+    print(f"Done in {time.time() - t0:.2f}s")
+
+    # ── Model ──────────────────────────────────────────────────────────
     if base_weights and os.path.exists(base_weights):
         model.load_weights(base_weights)
     model = model.to(device)
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Model parameters: {total_params:,}")
 
+    # ── Optimizer + LR scheduler + loss ───────────────────────────────
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
+    # Reduce LR when val loss stagnates.
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=LR_SCHEDULER_FACTOR,
+        patience=LR_SCHEDULER_PATIENCE,
+        min_lr=LR_MIN,
+    )
 
     loss_fn = nn.BCELoss()
 
-    print("Starting training …")
+    # ── Training loop with early stopping ─────────────────────────────
+    print(
+        f"\nStarting training (max {EPOCHS} epochs, early-stop patience={EARLY_STOP_PATIENCE}) …\n"
+    )
     start_time = time.time()
+    best_val_loss = float("inf")
+    epochs_no_improve = 0
+    best_state_dict = None
 
     for epoch in range(EPOCHS):
-        epoch_loss = 0.0
-        batches = 0
+        t_ep = time.time()
 
-        # Fast in-VRAM shuffle
-        indices = torch.randperm(n_samples, device=device)
-        X_shuffled = X_all[indices]
-        y_shuffled = y_all[indices]
-        b_shuffled = b_all[indices]
-
-        for start_idx in range(0, n_samples, BATCH_SIZE):
-            batch_X = X_shuffled[start_idx : start_idx + BATCH_SIZE]
-            batch_y = y_shuffled[start_idx : start_idx + BATCH_SIZE]
-            batch_b = b_shuffled[start_idx : start_idx + BATCH_SIZE]
-
-            optimizer.zero_grad()  # ← correct position
-            pred = model(batch_X, batch_b)
-            loss = loss_fn(pred, batch_y)
-            loss.backward()
-            optimizer.step()
-
-            epoch_loss += loss.item()
-            batches += 1
-
-        avg_loss = epoch_loss / batches
-        elapsed = time.time() - start_time
-        print(
-            f"epoch {epoch + 1:3d}/{EPOCHS} | avg loss {avg_loss:.6f} | {elapsed:.1f}s"
+        tr_loss = run_epoch(
+            model,
+            X_tr,
+            y_tr,
+            b_tr,
+            BATCH_SIZE,
+            device,
+            optimizer=optimizer,
+            loss_fn=loss_fn,
+            training=True,
+        )
+        val_loss = run_epoch(
+            model,
+            X_val,
+            y_val,
+            b_val,
+            BATCH_SIZE,
+            device,
+            optimizer=optimizer,
+            loss_fn=loss_fn,
+            training=False,
         )
 
-    print(f"\nTraining done in {time.time() - start_time:.1f}s")
+        scheduler.step(val_loss)
+
+        elapsed = time.time() - start_time
+        lr_now = optimizer.param_groups[0]["lr"]
+
+        improved = val_loss < best_val_loss - 1e-6
+        marker = " ✓" if improved else ""
+        print(
+            f"epoch {epoch + 1:3d}/{EPOCHS} | "
+            f"train {tr_loss:.6f} | val {val_loss:.6f}{marker} | "
+            f"lr {lr_now:.2e} | {time.time() - t_ep:.1f}s / {elapsed:.0f}s total"
+        )
+
+        if improved:
+            best_val_loss = val_loss
+            epochs_no_improve = 0
+            # Keep a copy of the best weights in CPU memory.
+            best_state_dict = {
+                k: v.cpu().clone() for k, v in model.state_dict().items()
+            }
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= EARLY_STOP_PATIENCE:
+                print(
+                    f"\nEarly stopping: val loss did not improve for "
+                    f"{EARLY_STOP_PATIENCE} epochs. "
+                    f"Best val loss = {best_val_loss:.6f}"
+                )
+                break
+
+    total_time = time.time() - start_time
+    print(
+        f"\nTraining finished in {total_time:.1f}s | best val loss = {best_val_loss:.6f}"
+    )
+
+    # ── Restore best weights before saving ────────────────────────────
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+        print("Restored best checkpoint weights.")
 
     # ── Export weights ─────────────────────────────────────────────────
     model.cpu()
@@ -288,8 +450,25 @@ def train(gen_count: int, base_weights: Optional[str] = None, depth: int = 3):
     os.makedirs("databin", exist_ok=True)
     all_weights.tofile(out_path)
     print(
-        f"Saved {out_path} ({len(all_weights):,} floats, {len(all_weights) * 4:,} bytes)"
+        f"Saved {out_path} "
+        f"({len(all_weights):,} floats, {len(all_weights) * 4:,} bytes)"
     )
+
+    # ── Persist training stats for auto_train.rs to read ──────────────
+    stats = {
+        "gen": gen_count,
+        "depth": depth,
+        "best_val_loss": float(best_val_loss),
+        "total_samples": n_samples,
+        "params": total_params,
+        "samples_per_param": float(ratio),
+        "epochs_run": epoch + 1,
+        "training_seconds": float(total_time),
+    }
+    stats_path = f"databin/gen{gen_count}_stats.json"
+    with open(stats_path, "w") as f:
+        json.dump(stats, f, indent=2)
+    print(f"Stats saved to {stats_path}")
 
 
 # ─────────────────────────────────────────────
@@ -298,16 +477,28 @@ def train(gen_count: int, base_weights: Optional[str] = None, depth: int = 3):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("gen_count", type=int, nargs="?", default=0)
+    parser.add_argument("--base-weights", type=str, default=None)
+    parser.add_argument("--depth", type=int, default=3)
     parser.add_argument(
-        "--base-weights", type=str, default=None, help="Path to base weights to load"
-    )
-    parser.add_argument(
-        "--depth",
-        type=int,
-        default=3,
-        help="Current depth used in data generation",
+        "--lineage",
+        type=str,
+        default=None,
+        help="Comma-separated list of promoted generation numbers "
+        "(e.g. '0,3,7,12'). Only these gens will be used for training. "
+        "Rejected gens are excluded even if their data file exists.",
     )
     args = parser.parse_args()
 
-    # LEARNING_RATE = args.depth
-    train(args.gen_count, base_weights=args.base_weights, depth=args.depth)
+    lineage = None
+    if args.lineage:
+        try:
+            lineage = [int(x.strip()) for x in args.lineage.split(",") if x.strip()]
+        except ValueError:
+            print(f"[warn] Could not parse --lineage='{args.lineage}', ignoring.")
+
+    train(
+        args.gen_count,
+        base_weights=args.base_weights,
+        depth=args.depth,
+        lineage=lineage,
+    )
