@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()> {
             _ => unreachable!(),
         };
 
-        println!("played {} or ({}, {})", mv, mv / 9, mv % 9);
+        println!("played {} or ({}, {})", mv, mv % 9 + 1, mv / 9 + 1);
         board.make(mv);
         println!("{}", board);
         turn ^= 1;
