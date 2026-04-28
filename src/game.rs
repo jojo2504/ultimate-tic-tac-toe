@@ -1,5 +1,8 @@
 use crate::{
-    core::TicTacToe, movegen::generate_random_legal_move, network::Network, search::Search,
+    core::TicTacToe,
+    movegen::{generate_moves, generate_random_legal_move},
+    network::Network,
+    search::Search,
     train::Sample,
 };
 
@@ -17,22 +20,33 @@ pub fn start_self_game() {
     println!("{:?}", board.result());
 }
 
-/// Bootstrap-only path: random policy, no search, no policy target.
-/// Sample.policy is left as zeros — Phase 2 trainer must skip policy loss
-/// for these samples (or weight them down).
+/// Bootstrap-only path: uniform policy over legal moves.
 pub fn random_game() -> Vec<Sample> {
     let mut samples = vec![];
 
     let mut game = TicTacToe::new();
     while !game.check_win() && !game.is_full() {
         let features = game.to_features();
+        let legal_moves = generate_moves(&game);
+        let count = legal_moves.count_ones();
 
-        samples.push(Sample::new_no_policy(
+        let mut policy = [0.0; 81];
+        let prob = if count > 0 { 1.0 / count as f32 } else { 0.0 };
+
+        let mut moves = legal_moves;
+        while moves != 0 {
+            let mv = moves.trailing_zeros() as usize;
+            policy[mv] = prob;
+            moves &= moves - 1;
+        }
+
+        samples.push(Sample {
             features,
-            0.5,
-            0.0, // outcome filled later
-            game.ply as f32,
-        ));
+            policy,
+            search_score: 0.5,
+            outcome: 0.0, // outcome filled later
+            ply: game.ply as f32,
+        });
 
         let mv = generate_random_legal_move(&game);
         game.make(mv);

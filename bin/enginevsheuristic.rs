@@ -425,103 +425,63 @@ fn score_to_search_score(raw: i32, is_x_to_move: bool) -> f32 {
 }
 
 // ─── Single game generation ────────────────────────────────────────────────────
-pub fn heuristic_game(params: &HeuristicParams) -> Vec<Sample> {
-    let mut samples: Vec<Sample> = vec![];
-    let mut game = TicTacToe::new();
 
-    while !is_terminal(&game) {
-        let features = game.to_features();
-        let is_x_to_move = current_player(&game) == 0;
+use ultimate_tic_tac_toe::network::Network;
+use ultimate_tic_tac_toe::search::Search;
 
-        // Evaluate the position before making the move (training signal).
-        let raw_score = evaluate_heuristic(&game, params);
-        let search_score = score_to_search_score(raw_score, is_x_to_move);
+fn play_game(params: &HeuristicParams, net: &Network, depth: i32, heuristic_player: usize) {
+    let mut board = TicTacToe::new();
+    let mut search = Search::new();
 
-        let legal_moves = generate_moves(&game);
-        let count = legal_moves.count_ones();
+    println!("Starting game. Heuristic is player {}", heuristic_player);
 
-        let mut policy = [0.0; 81];
-        let prob = if count > 0 { 1.0 / count as f32 } else { 0.0 };
-
-        let mut moves = legal_moves;
-        while moves != 0 {
-            let mv = moves.trailing_zeros() as usize;
-            policy[mv] = prob;
-            moves &= moves - 1;
-        }
-
-        samples.push(Sample {
-            features,
-            policy,
-            search_score,
-            outcome: 0.0, // filled in below once the game is over
-            ply: game.ply as f32,
-        });
-
-        // Select move using minimax.
-        let mv = match best_move(&game, params) {
-            Some(m) => m,
-            None => break,
-        };
-        game.make(mv);
-    }
-
-    // ── Fill in outcome (same alternating-perspective logic as random_game) ──
-    let outcome = if game.check_win() {
-        1.0f32 // the last player to move won
-    } else {
-        0.5f32 // draw
-    };
-
-    let n = samples.len();
-    for (i, s) in samples.iter_mut().enumerate() {
-        s.outcome = if (n - 1 - i) % 2 == 0 {
-            outcome
+    while !is_terminal(&board) {
+        if current_player(&board) == heuristic_player {
+            let mv = best_move(&board, params).expect("Heuristic found no move");
+            println!("Heuristic plays: {} or ({}, {})", mv, mv / 9, mv % 9);
+            board.make(mv);
         } else {
-            1.0 - outcome
+            let mv = search.think(&board, depth, net, None);
+            println!("Engine plays: {} or ({}, {})", mv, mv / 9, mv % 9);
+            board.make(mv as u8);
+        }
+        println!("{}", board);
+    }
+
+    if board.check_win() {
+        let winner = board.turn.swap();
+        let winner_idx = if winner == ultimate_tic_tac_toe::core::Symbol::Cross {
+            0
+        } else {
+            1
         };
+        if winner_idx == heuristic_player {
+            println!("Result: Heuristic wins!");
+        } else {
+            println!("Result: Engine wins!");
+        }
+    } else {
+        println!("Result: Draw!");
     }
-
-    samples
 }
 
-// ─── Parallel bootstrap ────────────────────────────────────────────────────────
-/// Generate `games` full games using the heuristic and flush to `databin/gen0_data.bin`.
-/// Call this once before the main training loop if gen0 data doesn't exist yet.
-pub fn generate_bootstrap_databin(
-    games: i32,
-    _depth_hint: i32, // kept for API symmetry with generate_iterative_databin
-) -> anyhow::Result<()> {
-    println!("Bootstrap: generating {games} heuristic self-play games (depth {MAX_DEPTH}) …");
+pub fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: {} <generation_number> <depth>", args[0]);
+        std::process::exit(1);
+    }
 
+    let gen_num = &args[1];
+    let depth: i32 = args[2].parse().unwrap();
+    let net = Network::load(format!("databin/gen{}_weights.bin", gen_num));
     let params = HeuristicParams::default();
-    let counter = AtomicUsize::new(0);
 
-    let game_samples: Vec<Vec<Sample>> = (0..games)
-        .into_par_iter()
-        .map(|_| {
-            let s = heuristic_game(&params);
-            let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
-            if done % 200 == 0 {
-                println!("  bootstrap: {done}/{games} games completed");
-            }
-            s
-        })
-        .collect();
+    println!("=== GAME 1: Heuristic (X) vs Engine (O) ===");
+    play_game(&params, &net, depth, 0);
 
-    let mut all_samples: Vec<Sample> = vec![];
-    for s in game_samples {
-        all_samples.extend(s);
-    }
+    println!("\n=== GAME 2: Engine (X) vs Heuristic (O) ===");
+    play_game(&params, &net, depth, 1);
 
-    println!(
-        "Bootstrap complete: {} samples from {games} games",
-        all_samples.len()
-    );
-
-    flush_samples(&all_samples, 0) // always writes to gen0_data.bin
-}
-
-pub fn main() {
-    let _ = generate_bootstrap_databin(2000, 3);
+    Ok(())
 }

@@ -8,15 +8,17 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 # ─────────────────────────────────────────────
 # Hyperparameters
 # ─────────────────────────────────────────────
 FEATURES = 217
+POLICY = 81
 SCORE = 1
 LABEL = 1
 PLY = 1
-ROW_SIZE = FEATURES + SCORE + LABEL + PLY  # 220
+ROW_SIZE = FEATURES + POLICY + SCORE + LABEL + PLY  # 301
 
 EPOCHS = 15  # raised ceiling — early stopping will cut this short when needed
 BATCH_SIZE = 8192
@@ -49,6 +51,9 @@ VAL_SPLIT = 0.10
 
 N_BUCKETS = 4
 
+# Loss weight for policy. Can be tuned.
+POLICY_LOSS_WEIGHT = 1.0
+
 
 def get_bucket(ply: int) -> int:
     return min(ply * N_BUCKETS // 82, N_BUCKETS - 1)
@@ -73,9 +78,14 @@ def load_samples(path: str):
             data = data.reshape(n, ROW_SIZE)
 
             X = torch.tensor(data[:, :FEATURES]).float()
-            search_scores = torch.tensor(data[:, FEATURES : FEATURES + 1]).float()
-            outcomes = torch.tensor(data[:, FEATURES + 1 : FEATURES + 2]).float()
-            plies = data[:, FEATURES + 2].astype(np.int64)
+            policies = torch.tensor(data[:, FEATURES : FEATURES + POLICY]).float()
+            search_scores = torch.tensor(
+                data[:, FEATURES + POLICY : FEATURES + POLICY + 1]
+            ).float()
+            outcomes = torch.tensor(
+                data[:, FEATURES + POLICY + 1 : FEATURES + POLICY + 2]
+            ).float()
+            plies = data[:, FEATURES + POLICY + 2].astype(np.int64)
             buckets = torch.tensor(
                 np.clip(plies * N_BUCKETS // 82, 0, N_BUCKETS - 1), dtype=torch.long
             )
@@ -90,7 +100,7 @@ def load_samples(path: str):
                 )
 
             print(f"  loaded {n:,} samples")
-            return X, y, buckets
+            return X, policies, y, buckets
 
     raise ValueError(f"Could not align buffer, size={len(raw)}")
 
@@ -111,29 +121,18 @@ def discover_generations(databin_dir: str = "./databin") -> list[int]:
 
 def build_windowed_dataset(
     current_gen: int,
-    lineage: Optional[list[int]] = None,  # ← NEW: only use promoted gens when provided
+    lineage: Optional[list[int]] = None,
     window: int = GEN_WINDOW,
     newest_weight: float = NEWEST_GEN_WEIGHT,
     databin_dir: str = "./databin",
 ):
-    """
-    Build the training tensor from available generation data files.
-
-    If `lineage` is provided (list of promoted gen numbers passed from auto_train.rs),
-    only those generations are eligible — rejected gens are excluded even if their
-    data file still exists on disk.  The rolling `window` is then applied on top of
-    the lineage list to keep memory bounded.
-    """
     all_gens = discover_generations(databin_dir)
     all_gens = [g for g in all_gens if g <= current_gen]
 
     if lineage is not None:
         lineage_set = set(lineage)
-        # Always include gen0 (bootstrap baseline) and 10-gen milestones that are
-        # in the lineage so we never lose the historical anchor.
         filtered = [g for g in all_gens if g in lineage_set or g == 0]
         if not filtered:
-            # Graceful fallback: lineage filtering removed everything — use raw window
             print("[warn] lineage filter removed all gens, falling back to full window")
             filtered = all_gens
         all_gens = sorted(set(filtered))
@@ -156,16 +155,17 @@ def build_windowed_dataset(
 
     print(f"\nTraining window: generations {selected}")
 
-    X_list, y_list, b_list = [], [], []
+    X_list, p_list, y_list, b_list = [], [], [], []
     for gen in selected:
         path = os.path.join(databin_dir, f"gen{gen}_data.bin")
         if not os.path.exists(path):
             print(f"  [warn] {path} missing, skipping")
             continue
-        X, y, buckets = load_samples(path)
+        X, p, y, buckets = load_samples(path)
         repeats = int(newest_weight) if gen == selected[-1] else 1
         for _ in range(repeats):
             X_list.append(X)
+            p_list.append(p)
             y_list.append(y)
             b_list.append(buckets)
 
@@ -173,11 +173,12 @@ def build_windowed_dataset(
         raise RuntimeError("No data loaded — all generation files were missing.")
 
     X_all = torch.cat(X_list, dim=0)
+    p_all = torch.cat(p_list, dim=0)
     y_all = torch.cat(y_list, dim=0)
     b_all = torch.cat(b_list, dim=0)
 
     print(f"\nTotal samples in training window: {len(X_all):,}\n")
-    return X_all, y_all, b_all
+    return X_all, p_all, y_all, b_all
 
 
 # ─────────────────────────────────────────────
@@ -194,14 +195,21 @@ class SinglePerspectiveNNUE(nn.Module):
         self.fc0 = nn.Linear(features, hl)
         self.fc1 = nn.Linear(hl, 64)
         self.fc2 = nn.Linear(64, N_BUCKETS)
+        self.policy_head = nn.Linear(64, 81)
         self.screlu = SCReLU()
 
     def forward(self, x, buckets: torch.Tensor):
         l1 = self.screlu(self.fc0(x))
         l2 = self.screlu(self.fc1(l1))
+
+        # Value out
         all_out = self.fc2(l2)  # [batch, N_BUCKETS]
         out = all_out.gather(1, buckets.unsqueeze(1)).squeeze(1)
-        return torch.sigmoid(out)
+
+        # Policy out (raw logits)
+        pol_out = self.policy_head(l2)
+
+        return torch.sigmoid(out), pol_out
 
     def load_weights(self, path: str):
         print(f"Loading base weights from {path} ...")
@@ -212,6 +220,12 @@ class SinglePerspectiveNNUE(nn.Module):
         with torch.no_grad():
             for p in self.parameters():
                 numel = p.numel()
+                if offset + numel > len(all_weights):
+                    print(
+                        "  Legacy weights detected, skipping policy head init (leaving as random/zero)."
+                    )
+                    p.zero_()
+                    continue
                 w = all_weights[offset : offset + numel].copy()
                 p.copy_(torch.from_numpy(w).view_as(p))
                 offset += numel
@@ -224,48 +238,68 @@ class SinglePerspectiveNNUE(nn.Module):
 # ─────────────────────────────────────────────
 # Train / val split helpers
 # ─────────────────────────────────────────────
-def split_dataset(X, y, b, val_fraction: float = VAL_SPLIT):
-    """Shuffle and split into train / val tensors."""
+def split_dataset(X, p, y, b, val_fraction: float = VAL_SPLIT):
     n = len(X)
     perm = torch.randperm(n)
-    X, y, b = X[perm], y[perm], b[perm]
+    X, p, y, b = X[perm], p[perm], y[perm], b[perm]
 
     n_val = max(1, int(n * val_fraction))
     n_tr = n - n_val
 
     return (
         X[:n_tr],
+        p[:n_tr],
         y[:n_tr],
         b[:n_tr],  # train
         X[n_tr:],
+        p[n_tr:],
         y[n_tr:],
         b[n_tr:],  # val
     )
 
 
-def run_epoch(
-    model, X, y, b, batch_size, device, optimizer=None, loss_fn=None, training=True
-):
-    """Run one full pass.  Returns average loss."""
+def run_epoch(model, X, p, y, b, batch_size, device, optimizer=None, training=True):
     model.train(training)
     total_loss = 0.0
     n = len(X)
     indices = (
         torch.randperm(n, device=device) if training else torch.arange(n, device=device)
     )
-    X_s, y_s, b_s = X[indices], y[indices], b[indices]
+    X_s, p_s, y_s, b_s = X[indices], p[indices], y[indices], b[indices]
+
+    val_loss_fn = nn.BCELoss()
 
     with torch.set_grad_enabled(training):
         for start in range(0, n, batch_size):
             bX = X_s[start : start + batch_size]
+            bp = p_s[start : start + batch_size]
             by = y_s[start : start + batch_size]
             bb = b_s[start : start + batch_size]
 
             if training:
                 optimizer.zero_grad()
 
-            pred = model(bX, bb)
-            loss = loss_fn(pred, by)
+            val_pred, pol_pred = model(bX, bb)
+
+            # Value loss
+            v_loss = val_loss_fn(val_pred, by)
+
+            # Policy loss
+            # Only calculate policy loss for samples that have policy targets (i.e. not bootstrap)
+            # The bootstrap samples have policy array set to 0.
+            p_mask = (bp.sum(dim=1) > 0.0).float()
+
+            # CrossEntropyLoss expects logits and probabilities
+            # reduction='none' allows us to apply the mask
+            p_loss_raw = F.cross_entropy(pol_pred, bp, reduction="none")
+
+            mask_sum = p_mask.sum()
+            if mask_sum > 0:
+                p_loss = (p_loss_raw * p_mask).sum() / mask_sum
+            else:
+                p_loss = 0.0
+
+            loss = v_loss + POLICY_LOSS_WEIGHT * p_loss
 
             if training:
                 loss.backward()
@@ -287,7 +321,6 @@ def train(
 ):
     global BATCH_SIZE, LEARNING_RATE, SCORE_RATIO, OUTCOME_RATIO, GEN_WINDOW, EPOCHS
 
-    # ── Config override ────────────────────────────────────────────────
     try:
         with open("config/config.json", "r") as f:
             config = json.load(f)
@@ -307,15 +340,13 @@ def train(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # ── Build dataset ──────────────────────────────────────────────────
-    X_all, y_all, b_all = build_windowed_dataset(
+    X_all, p_all, y_all, b_all = build_windowed_dataset(
         current_gen=gen_count,
         lineage=lineage,
         window=GEN_WINDOW,
         newest_weight=NEWEST_GEN_WEIGHT,
     )
 
-    # ── Dataset-size vs parameter-count health check ───────────────────
     model = SinglePerspectiveNNUE(features=FEATURES, hl=128)
     total_params = model.count_params()
     n_samples = len(X_all)
@@ -337,25 +368,33 @@ def train(
     else:
         print(f"Dataset size OK ✓\n")
 
-    # ── Train / val split and move to device ──────────────────────────
-    X_tr, y_tr, b_tr, X_val, y_val, b_val = split_dataset(X_all, y_all, b_all)
+    X_tr, p_tr, y_tr, b_tr, X_val, p_val, y_val, b_val = split_dataset(
+        X_all, p_all, y_all, b_all
+    )
 
     print(f"Train samples : {len(X_tr):,}  |  Val samples : {len(X_val):,}")
     print("Moving dataset to device …")
     t0 = time.time()
-    X_tr, y_tr, b_tr = X_tr.to(device), y_tr.to(device), b_tr.to(device)
-    X_val, y_val, b_val = X_val.to(device), y_val.to(device), b_val.to(device)
+    X_tr, p_tr, y_tr, b_tr = (
+        X_tr.to(device),
+        p_tr.to(device),
+        y_tr.to(device),
+        b_tr.to(device),
+    )
+    X_val, p_val, y_val, b_val = (
+        X_val.to(device),
+        p_val.to(device),
+        y_val.to(device),
+        b_val.to(device),
+    )
     print(f"Done in {time.time() - t0:.2f}s")
 
-    # ── Model ──────────────────────────────────────────────────────────
     if base_weights and os.path.exists(base_weights):
         model.load_weights(base_weights)
     model = model.to(device)
 
-    # ── Optimizer + LR scheduler + loss ───────────────────────────────
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    # Reduce LR when val loss stagnates.
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",
@@ -364,9 +403,6 @@ def train(
         min_lr=LR_MIN,
     )
 
-    loss_fn = nn.BCELoss()
-
-    # ── Training loop with early stopping ─────────────────────────────
     print(
         f"\nStarting training (max {EPOCHS} epochs, early-stop patience={EARLY_STOP_PATIENCE}) …\n"
     )
@@ -381,23 +417,23 @@ def train(
         tr_loss = run_epoch(
             model,
             X_tr,
+            p_tr,
             y_tr,
             b_tr,
             BATCH_SIZE,
             device,
             optimizer=optimizer,
-            loss_fn=loss_fn,
             training=True,
         )
         val_loss = run_epoch(
             model,
             X_val,
+            p_val,
             y_val,
             b_val,
             BATCH_SIZE,
             device,
             optimizer=optimizer,
-            loss_fn=loss_fn,
             training=False,
         )
 
@@ -417,7 +453,6 @@ def train(
         if improved:
             best_val_loss = val_loss
             epochs_no_improve = 0
-            # Keep a copy of the best weights in CPU memory.
             best_state_dict = {
                 k: v.cpu().clone() for k, v in model.state_dict().items()
             }
@@ -436,12 +471,10 @@ def train(
         f"\nTraining finished in {total_time:.1f}s | best val loss = {best_val_loss:.6f}"
     )
 
-    # ── Restore best weights before saving ────────────────────────────
     if best_state_dict is not None:
         model.load_state_dict(best_state_dict)
         print("Restored best checkpoint weights.")
 
-    # ── Export weights ─────────────────────────────────────────────────
     model.cpu()
     weights = [p.detach().numpy().flatten() for p in model.parameters()]
     all_weights = np.concatenate(weights).astype(np.float32)
@@ -454,7 +487,6 @@ def train(
         f"({len(all_weights):,} floats, {len(all_weights) * 4:,} bytes)"
     )
 
-    # ── Persist training stats for auto_train.rs to read ──────────────
     stats = {
         "gen": gen_count,
         "depth": depth,
@@ -471,9 +503,6 @@ def train(
     print(f"Stats saved to {stats_path}")
 
 
-# ─────────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────────
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("gen_count", type=int, nargs="?", default=0)

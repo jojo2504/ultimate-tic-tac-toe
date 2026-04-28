@@ -45,7 +45,7 @@ fn play_game(
 }
 
 fn main() -> anyhow::Result<()> {
-    let max_gen = 181;
+    let max_gen = 98;
     let depth = 5;
 
     println!("Pre-loading all available networks up to gen{}...", max_gen);
@@ -63,12 +63,12 @@ fn main() -> anyhow::Result<()> {
     let mut candidates: Vec<i32> = available_gens
         .iter()
         .cloned()
-        .filter(|&g| g >= 160 && g <= 181)
+        .filter(|&g| g >= 60 && g <= 98)
         .collect();
     candidates.sort();
 
     println!(
-        "Starting evaluation of {} candidates (gen 160-181) against {} opponents at Depth {}...",
+        "Starting evaluation of {} candidates (gen 60-98) against {} opponents at Depth {}...",
         candidates.len(),
         available_gens.len(),
         depth

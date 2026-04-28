@@ -63,18 +63,63 @@ fn cleanup_old_generations(current_gen: i32, window_length: i32) -> usize {
     removed
 }
 
+fn adaptive_tournament(past_net: &str, challenger: &str, depth: i32) -> (f32, usize) {
+    let quick_elo = tournament(past_net, challenger, 100, depth);
+    if quick_elo.abs() > 40.0 {
+        println!("  decisive after 100 games ({quick_elo:+.1} Elo) — skipping extended run");
+        return (quick_elo, 100);
+    }
+    println!("  close ({quick_elo:+.1} Elo) — running 300 more games for confidence");
+    let full_elo = tournament(past_net, challenger, 400, depth);
+    (full_elo, 400)
+}
+
+fn read_training_stats(gen_count: i32) -> Option<(f32, f32)> {
+    let path = format!("databin/gen{gen_count}_stats.json");
+    let content = fs::read_to_string(&path).ok()?;
+    let v: Value = serde_json::from_str(&content).ok()?;
+    let val_loss = v.get("best_val_loss")?.as_f64()? as f32;
+    let ratio = v.get("samples_per_param")?.as_f64()? as f32;
+    Some((val_loss, ratio))
+}
+
 fn main() -> anyhow::Result<()> {
     let mut gen_count = 1;
-    let mut best_gen = 0;
-    let mut best_net = format!("databin/gen{}_weights.bin", gen_count - 1);
+    // Check if we are resuming from a previous run
+    if let Ok(entries) = fs::read_dir("databin") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("gen") && name.ends_with("_weights.bin") {
+                if let Ok(num) = name
+                    .trim_start_matches("gen")
+                    .trim_end_matches("_weights.bin")
+                    .parse::<i32>()
+                {
+                    if num >= gen_count {
+                        gen_count = num + 1;
+                    }
+                }
+            }
+        }
+    }
 
-    let depth = 3;
+    let mut best_gen = 91;
+    let mut best_net = format!("databin/gen{}_weights.bin", best_gen);
+
+    let mut depth = 5;
     let mut plateau_count = 0;
     let mut global_elo = fs::read_to_string("databin/global_elo.txt")
         .unwrap_or_else(|_| "1200.0".to_string())
         .trim()
         .parse::<f32>()
         .unwrap_or(1200.0);
+
+    println!(
+        "{}",
+        format!("Resuming from gen{gen_count} | best=gen{best_gen} | global Elo={global_elo:.1}")
+            .cyan()
+            .bold()
+    );
 
     loop {
         let mut games_per_generation = 3000;
@@ -102,6 +147,15 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
+        println!(
+            "\n{}",
+            format!(
+                "════ Generation {gen_count} | best=gen{best_gen} | \
+                 depth={depth} | plateau={plateau_count}/{plateau_threshold} ════"
+            )
+            .bold()
+        );
+
         println!("generating self-play data... (depth {depth}, games {games_per_generation})");
         train::generate_iterative_databin(gen_count, best_gen, depth, games_per_generation)?;
 
@@ -115,11 +169,30 @@ fn main() -> anyhow::Result<()> {
             .arg(depth.to_string())
             .status()?;
 
+        if let Some((val_loss, ratio)) = read_training_stats(gen_count) {
+            println!(
+                "{}",
+                format!(
+                    "  train.py stats: best val loss={val_loss:.6}, \
+                     samples/param={ratio:.1}×"
+                )
+                .cyan()
+            );
+            if ratio < 10.0 {
+                println!(
+                    "{}",
+                    "  [WARN] < 10× samples-per-param — consider more games_per_generation"
+                        .yellow()
+                );
+            }
+        }
+
         let challenger = format!("databin/gen{}_weights.bin", gen_count);
 
         println!("evaluating against pool...");
         let mut total_elo = 0.0;
         let mut elo_vs_best = 0.0;
+        let mut total_games = 0usize;
 
         let mut pool = vec![best_gen];
         if best_gen >= 1 {
@@ -137,40 +210,24 @@ fn main() -> anyhow::Result<()> {
 
         for &past_gen in &pool {
             let past_net = format!("databin/gen{}_weights.bin", past_gen);
-            let elo = tournament(&past_net, &challenger, 200, depth);
-            println!("gen{gen_count} vs gen{past_gen}: {elo:+.1} Elo");
+            let (elo, games) = adaptive_tournament(&past_net, &challenger, depth);
+            println!("gen{gen_count} vs gen{past_gen}: {elo:+.1} Elo ({games} games)");
             total_elo += elo;
+            total_games += games;
             if past_gen == best_gen {
                 elo_vs_best = elo;
             }
         }
 
         let avg_elo = total_elo / pool.len() as f32;
-        println!("gen{gen_count} vs pool average: {avg_elo:+.1} Elo");
+        println!(
+            "pool summary: avg={avg_elo:+.1}, vs_best={elo_vs_best:+.1}, {total_games} games total"
+        );
 
-        let promoted = avg_elo > 0.0 && elo_vs_best > 0.0;
-
-        if !promoted {
-            plateau_count += 1;
-        } else {
-            plateau_count = 0;
-        }
-
-        if plateau_count >= plateau_threshold {
-            plateau_count = 0;
-            println!(
-                "{}",
-                format!(
-                    "\n>>> REJECTIONS PLATEAUING. BE CAREFUL <<< {} \n",
-                    plateau_count
-                )
-                .magenta()
-                .bold()
-            );
-            break;
-        }
+        let promoted = avg_elo > 40.0 && elo_vs_best > 20.0;
 
         if promoted {
+            plateau_count = 0;
             global_elo += elo_vs_best;
             let _ = fs::write("databin/global_elo.txt", global_elo.to_string());
             println!(
@@ -184,10 +241,40 @@ fn main() -> anyhow::Result<()> {
             best_net = challenger;
             best_gen = gen_count;
         } else {
+            plateau_count += 1;
             println!(
                 "{}",
-                format!("rejecting gen{gen_count}, keeping {best_net}").red()
+                format!(
+                    "rejecting gen{gen_count}, keeping {best_net} (plateau {}/{})",
+                    plateau_count, plateau_threshold
+                )
+                .red()
             );
+
+            // Purge rejected data immediately
+            let data_path = format!("databin/gen{}_data.bin", gen_count);
+            if fs::metadata(&data_path).is_ok() {
+                let _ = fs::remove_file(&data_path);
+                println!(
+                    "{}",
+                    format!("  purged gen{gen_count} data to prevent contamination").red()
+                );
+            }
+        }
+
+        if plateau_count >= plateau_threshold {
+            plateau_count = 0;
+            depth += 1;
+            println!(
+                "{}",
+                format!(
+                    "\n>>> PLATEAU REACHED — INCREASING DEPTH TO {} <<<\n",
+                    depth
+                )
+                .magenta()
+                .bold()
+            );
+            // We do not break, we continue looping with the new depth
         }
 
         // Smart disk cleanup: remove data files outside the window
@@ -202,6 +289,4 @@ fn main() -> anyhow::Result<()> {
 
         gen_count += 1;
     }
-
-    Ok(())
 }
