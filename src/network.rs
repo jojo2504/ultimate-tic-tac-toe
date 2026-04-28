@@ -10,6 +10,19 @@ const N_BUCKETS: usize = 4;
 const QA: i32 = 256;
 const QB: i32 = 64;
 
+/// Policy head output size = number of board squares.
+pub const POLICY_HEAD_OUT: usize = 81;
+
+/// Number of f32 weights in the legacy (value-only) network format.
+/// Used to detect whether a weight file includes the policy head.
+const LEGACY_WEIGHT_FLOATS: usize =
+    128 * FEATURES_COUNT + 128                  // fc0
+    + 64 * 128 + 64                              // fc1
+    + N_BUCKETS * 64 + N_BUCKETS;                // fc2 (value head)
+
+/// Extra floats added by the policy head: policy_w (81×64) + policy_b (81).
+const POLICY_HEAD_FLOATS: usize = POLICY_HEAD_OUT * 64 + POLICY_HEAD_OUT;
+
 // Bucket by ply (call this before forward)
 pub fn get_bucket(ply: usize) -> usize {
     (ply * N_BUCKETS / 82).min(N_BUCKETS - 1)
@@ -28,6 +41,12 @@ pub struct Network {
     pub b1: [i32; 64],
     pub w2: [[i16; 64]; N_BUCKETS],
     pub b2: [i32; N_BUCKETS],
+    /// Policy head — produces 81 logits from the 64-wide hidden layer.
+    /// All-zero when the loaded weight file is in the legacy (value-only)
+    /// format: `forward_policy` then returns all zeros, which makes the
+    /// search ordering fall back to the history heuristic.
+    pub policy_w: [[i16; 64]; POLICY_HEAD_OUT],
+    pub policy_b: [i32; POLICY_HEAD_OUT],
 }
 
 #[inline(always)]
@@ -77,6 +96,29 @@ impl Network {
             o += 1;
         }
 
+        // ── Policy head (optional) ────────────────────────────────────────
+        // If the weight file is from the legacy (value-only) Python trainer,
+        // it has exactly LEGACY_WEIGHT_FLOATS floats. The policy head fields
+        // remain zero-initialised, so forward_policy returns zeros and the
+        // search falls back to the history heuristic.
+        //
+        // Once the Python trainer is upgraded with a policy head, it appends
+        // POLICY_HEAD_FLOATS extra floats to the file, which are loaded here.
+        let has_policy = f.len() >= LEGACY_WEIGHT_FLOATS + POLICY_HEAD_FLOATS;
+        if has_policy {
+            for i in 0..POLICY_HEAD_OUT {
+                for j in 0..64 {
+                    net.policy_w[i][j] = (f[o] * QB as f32).round() as i16;
+                    o += 1;
+                }
+            }
+            for i in 0..POLICY_HEAD_OUT {
+                net.policy_b[i] = (f[o] * QA as f32 * QB as f32).round() as i32;
+                o += 1;
+            }
+        }
+        // else: policy_w / policy_b stay at zeros (graceful fallback)
+
         net
     }
 
@@ -93,7 +135,20 @@ impl Network {
     }
 
     fn forward_scalar(&self, acc: &[i16; 128], bucket: usize) -> f32 {
-        // Layer 1
+        let h1 = self.compute_hidden(acc);
+
+        // Value head (per-bucket linear)
+        let mut out = self.b2[bucket]; // scale: QA * QB
+        for i in 0..64 {
+            out += h1[i] * self.w2[bucket][i] as i32; // QA * QB
+        }
+
+        sigmoid(out as f32 / (QA * QB) as f32)
+    }
+
+    /// Shared backbone: input → fc0 (already in `acc`) → fc1 → SCReLU → 64-wide.
+    /// Both the value head and the policy head consume this output.
+    fn compute_hidden(&self, acc: &[i16; 128]) -> [i32; 64] {
         let mut h1 = [0i32; 64];
         for i in 0..64 {
             let mut sum = self.b1[i]; // scale: QA * QB
@@ -103,14 +158,57 @@ impl Network {
             }
             h1[i] = (sum >> 6).clamp(0, QA); // >> 6 = / QB → scale: QA
         }
+        h1
+    }
 
-        // Layer 2
-        let mut out = self.b2[bucket]; // scale: QA * QB
-        for i in 0..64 {
-            out += h1[i] * self.w2[bucket][i] as i32; // QA * QB
+    /// Phase 3: returns 81 policy *probabilities* (not logits), already
+    /// softmaxed and ready to feed into move-ordering / LMR.
+    ///
+    /// When the policy head is untrained (all zeros), every logit is the same
+    /// and softmax produces a uniform distribution. Callers that want to
+    /// detect "policy unavailable" can check `is_policy_trained()` instead.
+    pub fn forward_policy(&self, acc: &[i16; 128]) -> [f32; POLICY_HEAD_OUT] {
+        let h1 = self.compute_hidden(acc);
+
+        // Linear projection: 64 → 81
+        let mut logits = [0.0f32; POLICY_HEAD_OUT];
+        let scale = (QA * QB) as f32;
+        for o in 0..POLICY_HEAD_OUT {
+            let mut sum = self.policy_b[o] as i64;
+            for i in 0..64 {
+                sum += (h1[i] as i64) * (self.policy_w[o][i] as i64);
+            }
+            logits[o] = sum as f32 / scale;
         }
 
-        sigmoid(out as f32 / (QA * QB) as f32)
+        // Softmax (numerically stable). For an untrained head all logits are
+        // ~0 → returns 1/81 uniform. The search ordering doesn't care about
+        // absolute scale, so this is fine as a fallback.
+        let max_logit = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let mut total = 0.0f32;
+        for o in 0..POLICY_HEAD_OUT {
+            logits[o] = (logits[o] - max_logit).exp();
+            total += logits[o];
+        }
+        if total > 0.0 {
+            for o in 0..POLICY_HEAD_OUT {
+                logits[o] /= total;
+            }
+        }
+        logits
+    }
+
+    /// Cheap heuristic: a policy head is "trained" if any of its weights are
+    /// non-zero. Used to skip work when the file is in legacy format.
+    pub fn is_policy_trained(&self) -> bool {
+        // Check a handful of weights — full scan would be wasteful per call.
+        // If the head is loaded, at least one of these will be non-zero.
+        self.policy_w[0][0] != 0
+            || self.policy_w[40][32] != 0
+            || self.policy_w[80][63] != 0
+            || self.policy_b[0] != 0
+            || self.policy_b[40] != 0
+            || self.policy_b[80] != 0
     }
 
     #[cfg(target_arch = "x86_64")]

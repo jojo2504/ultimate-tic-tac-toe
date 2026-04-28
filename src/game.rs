@@ -15,15 +15,11 @@ pub fn start_self_game() {
     }
 
     println!("{:?}", board.result());
-
-    // println!(
-    //     "{:?} {:?} won: \n{}",
-    //     game.check_win(),
-    //     // game.last_move.unwrap(),
-    //     game
-    // );
 }
 
+/// Bootstrap-only path: random policy, no search, no policy target.
+/// Sample.policy is left as zeros — Phase 2 trainer must skip policy loss
+/// for these samples (or weight them down).
 pub fn random_game() -> Vec<Sample> {
     let mut samples = vec![];
 
@@ -31,12 +27,12 @@ pub fn random_game() -> Vec<Sample> {
     while !game.check_win() && !game.is_full() {
         let features = game.to_features();
 
-        samples.push(Sample {
+        samples.push(Sample::new_no_policy(
             features,
-            search_score: 0.5,
-            outcome: 0.0,
-            ply: game.ply as f32,
-        }); // outcome filled later
+            0.5,
+            0.0, // outcome filled later
+            game.ply as f32,
+        ));
 
         let mv = generate_random_legal_move(&game);
         game.make(mv);
@@ -50,7 +46,6 @@ pub fn random_game() -> Vec<Sample> {
     // alternate perspective per move
     let n = samples.len();
     for (i, s) in samples.iter_mut().enumerate() {
-        // Winner moved at ply n-1; winner's positions share parity with n-1
         s.outcome = if (n - 1 - i) % 2 == 0 {
             outcome
         } else {
@@ -60,6 +55,11 @@ pub fn random_game() -> Vec<Sample> {
     samples
 }
 
+/// Self-play with a trained network.
+///
+/// Each move now also captures the *policy distribution* produced by the
+/// search, which becomes the training target for the policy head in Phase 2.
+/// Dirichlet noise is injected at the root to keep self-play diverse.
 pub fn start_self_game_with_net(net: &Network, depth: i32) -> Vec<Sample> {
     let mut game = TicTacToe::new();
     let mut search = Search::new();
@@ -74,11 +74,14 @@ pub fn start_self_game_with_net(net: &Network, depth: i32) -> Vec<Sample> {
         let features = game.to_features();
         let ply = game.ply;
 
-        let (move_square, search_score) = search.think_training_scored(&game, depth, &net);
+        // Phase 1: capture (move, score, policy) instead of just (move, score)
+        let (move_square, search_score, policy) =
+            search.think_training_with_policy(&game, depth, net);
 
         pushed_samples.push(PushedSample {
             sample: Sample {
                 features,
+                policy,
                 search_score: search_score.clamp(0.0, 1.0),
                 outcome: 0.0,
                 ply: game.ply as f32,
