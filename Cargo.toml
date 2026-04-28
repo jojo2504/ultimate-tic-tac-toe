@@ -50,3 +50,7 @@ path = "bin/eval_all.rs"
 [[bin]]
 name="bootstrap"
 path="bin/bootstrap.rs"
+
+[[bin]]
+name = "gauntlet"
+path = "bin/gauntlet.rs"

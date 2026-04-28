@@ -11,12 +11,44 @@ use crate::{
     search::Search,
 };
 
-#[derive(Encode)]
+/// Width of the policy distribution (one slot per board square 0-80).
+pub const POLICY_LEN: usize = 81;
+
+/// Sample format v2 (with Policy head target).
+///
+/// Disk layout per sample, all little-endian f32:
+///   [features × 217][policy × 81][search_score][outcome][ply]
+///   = 217 + 81 + 3 = 301 floats = 1204 bytes
+///
+/// `policy[i]` is the softmaxed Negamax score for move i. Illegal moves get 0.
+/// Legal-move slots sum to 1.0 (when the position has at least one legal move).
+#[derive(Encode, Clone)]
 pub struct Sample {
     pub features: [f32; FEATURES_COUNT],
+    pub policy: [f32; POLICY_LEN],
     pub search_score: f32,
     pub outcome: f32,
     pub ply: f32,
+}
+
+impl Sample {
+    /// Builder used when policy is unknown (e.g. random_game bootstrap).
+    /// Policy is left as all zeros — the Python trainer must mask these out
+    /// or set policy_loss_weight = 0 when training on bootstrap data.
+    pub fn new_no_policy(
+        features: [f32; FEATURES_COUNT],
+        search_score: f32,
+        outcome: f32,
+        ply: f32,
+    ) -> Self {
+        Self {
+            features,
+            policy: [0.0; POLICY_LEN],
+            search_score,
+            outcome,
+            ply,
+        }
+    }
 }
 
 pub fn generate_first_databin(gen_count: i32, games_per_generation: i32) -> anyhow::Result<()> {
@@ -66,13 +98,22 @@ pub fn generate_iterative_databin(
     flush_samples(&all_samples, gen_count)
 }
 
+/// Serialize samples to disk in the v2 format (features + policy + scalars).
+///
+/// Total bytes per sample: (217 + 81 + 3) × 4 = 1204
 pub fn flush_samples(samples: &[Sample], gen_count: i32) -> anyhow::Result<()> {
     let file = std::fs::File::create(format!("databin/gen{}_data.bin", gen_count))?;
     let mut writer = BufWriter::new(file);
     for s in samples {
+        // 1. Features
         for f in &s.features {
             writer.write_all(&f.to_le_bytes())?;
         }
+        // 2. Policy distribution (NEW in v2)
+        for p in &s.policy {
+            writer.write_all(&p.to_le_bytes())?;
+        }
+        // 3. Scalar targets
         writer.write_all(&s.search_score.to_le_bytes())?;
         writer.write_all(&s.outcome.to_le_bytes())?;
         writer.write_all(&s.ply.to_le_bytes())?;
@@ -156,7 +197,7 @@ pub fn tournament(
     elo
 }
 
-fn elo_diff(wins: u32, draws: u32, losses: u32) -> f32 {
+pub fn elo_diff(wins: u32, draws: u32, losses: u32) -> f32 {
     let total = (wins + draws + losses) as f32;
     if total == 0.0 {
         return 0.0;
