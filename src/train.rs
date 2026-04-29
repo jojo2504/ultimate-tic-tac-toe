@@ -1,5 +1,6 @@
 use rayon::prelude::*;
 use std::io::{BufWriter, Write};
+use std::time::Duration;
 
 use bincode::Encode;
 
@@ -8,7 +9,7 @@ use crate::{
     core::{Result, TicTacToe},
     game::{random_game, start_self_game_with_net},
     network::{DualAccumulator, Network},
-    search::Search,
+    search::{Search, endgame_trigger},
 };
 
 #[derive(Encode)]
@@ -108,13 +109,31 @@ pub fn tournament(
                 let challenger_to_move = cross_to_move == challenger_is_cross;
 
                 if challenger_to_move {
-                    let mv = challenger_search.think_training(&game, depth, &challenger_net);
+                    let mv = if endgame_trigger(&game) {
+                        challenger_search
+                            .think_exact(&game, Duration::from_secs(15))
+                            .map(|(m, _)| m)
+                            .unwrap_or_else(|| {
+                                challenger_search.think_training(&game, depth, &challenger_net)
+                            })
+                    } else {
+                        challenger_search.think_training(&game, depth, &challenger_net)
+                    };
                     let old_ply = game.ply;
                     let delta = game.make(mv);
                     challenger_search.acc[game.ply] = challenger_search.acc[old_ply];
                     challenger_search.acc[game.ply].apply_delta(&challenger_net, &delta);
                 } else {
-                    let mv = base_search.think_training(&game, depth, &base_net);
+                    let mv = if endgame_trigger(&game) {
+                        base_search
+                            .think_exact(&game, Duration::from_secs(15))
+                            .map(|(m, _)| m)
+                            .unwrap_or_else(|| {
+                                base_search.think_training(&game, depth, &base_net)
+                            })
+                    } else {
+                        base_search.think_training(&game, depth, &base_net)
+                    };
                     let old_ply = game.ply;
                     let delta = game.make(mv);
                     base_search.acc[game.ply] = base_search.acc[old_ply];

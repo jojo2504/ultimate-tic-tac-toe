@@ -1,5 +1,10 @@
+use std::time::Duration;
+
 use crate::{
-    core::TicTacToe, movegen::generate_random_legal_move, network::Network, search::Search,
+    core::TicTacToe,
+    movegen::generate_random_legal_move,
+    network::Network,
+    search::{Search, endgame_trigger},
     train::Sample,
 };
 
@@ -74,7 +79,14 @@ pub fn start_self_game_with_net(net: &Network, depth: i32) -> Vec<Sample> {
         let features = game.to_features();
         let ply = game.ply;
 
-        let (move_square, search_score) = search.think_training_scored(&game, depth, &net);
+        let (move_square, search_score) = if endgame_trigger(&game) {
+            match search.think_exact(&game, Duration::from_secs(15)) {
+                Some(result) => result,
+                None => search.think_training_scored(&game, depth, &net),
+            }
+        } else {
+            search.think_training_scored(&game, depth, &net)
+        };
 
         pushed_samples.push(PushedSample {
             sample: Sample {
