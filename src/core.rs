@@ -245,6 +245,10 @@ impl fmt::Display for TicTacToe {
                     " X ".white().on_blue().bold()
                 } else if circle & mask != 0 {
                     " O ".black().on_red().bold()
+                } else if let Some(focus) = self.current_focus
+                    && CELL_TO_SUBBOARD_INDEX[row * 9 + col] == focus
+                {
+                    " . ".bright_magenta().bold()
                 } else {
                     " . ".dimmed()
                 };
