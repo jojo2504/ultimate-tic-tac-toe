@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     env::current_exe,
     sync::{Arc, Mutex, atomic::AtomicBool},
+    time::{Duration, Instant},
 };
 
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -306,5 +307,23 @@ impl Search {
             self.think(board, current_depth, net, Some(&stop.clone()));
             current_depth += 1;
         }
+    }
+
+    pub fn iterative_deepening_think(
+        &mut self,
+        board: &TicTacToe,
+        net: &Network,
+        duration: Duration,
+    ) -> (Option<u8>, i32) {
+        let deadline = Instant::now() + duration;
+        let mut current_depth = 1;
+        let mut best_mv = None;
+
+        while Instant::now() < deadline {
+            best_mv = Some(self.think(board, current_depth, net, None));
+            current_depth += 1;
+        }
+
+        (best_mv, current_depth)
     }
 }

@@ -6,6 +6,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
+    time::Duration,
 };
 
 use anyhow::bail;
@@ -40,7 +41,6 @@ fn main() -> anyhow::Result<()> {
     let mut search = Search::new();
 
     let mut buffer = String::new();
-    println!("set engine to depth: {}", args[2]);
     println!("Who starts first ? (player || engine)");
     stdin().read_line(&mut buffer)?;
 
@@ -72,7 +72,16 @@ fn main() -> anyhow::Result<()> {
             }
             1 => {
                 println!("Engine is thinking...");
-                search.think(&board, args[2].parse::<i32>().unwrap(), &net, None)
+                let result = search.iterative_deepening_think(&board, &net, Duration::from_secs(3));
+                let mv = result.0.unwrap();
+                println!(
+                    "Played {} or ({}, {}) with depth: {}",
+                    mv,
+                    mv / 9 + 1,
+                    mv % 9 + 1,
+                    result.1
+                );
+                mv
             }
             _ => unreachable!(),
         };
